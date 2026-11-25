@@ -1,7 +1,7 @@
 """Entry point of the integrated ALOX Vision Core application.
 
-Phase 3 (``docs/vision-core/phase3-skeleton.md``): the application container with its event bus and its devices; the Z
-stage is the only device so far. The core, the API, the functions and the UI come in the next phases.
+The application container with its event bus and its devices (``docs/vision-core/phase3-skeleton.md``): the Z stage, the
+XY stages and the two cameras so far; the core, the API, the functions and the UI are added phase by phase.
 
 Command line::
 
@@ -25,10 +25,16 @@ from pathlib import Path
 from typing import Any, Self
 
 from alox import __version__
+from alox.config import TypedIni
 from alox.devices.base import Device, DeviceError, DeviceState
+from alox.devices.camera import Camera
+from alox.devices.xy import XYSettings, XYStage, build_xy_backends, load_xy_settings
 from alox.devices.zstage import ZStage, build_stage_backend
 from alox.events import Event, EventBus
+from aloxcam.camera.backend import CameraBackend, CameraDevice
+from aloxcam.camera.sim import SimCameraBackend
 from aloxcam.config.alox_ini import load_alox_ini
+from aloxcam.errors import CameraError, Code
 from aloxcam.eventlog import DailyFileHandler
 from aloxcam.settings import (
     AloxSettings,
@@ -44,13 +50,30 @@ log = logging.getLogger("alox")
 
 @dataclass(frozen=True)
 class AppConfig:
-    """What the application needs to start. ``alox_ini`` None = built-in defaults."""
+    """What the application needs to start. ``alox_ini`` None = built-in defaults. ``devices`` selects the devices to
+    build (``z``, ``xy``, ``highmag``, ``lowmag``); ``genicam_producer`` is the GenTL producer (``.cti``) of the camera
+    SDK for the real cameras."""
 
     alox_ini: Path | None = None
     simulate: bool = False
     port_map: dict[str, str] = field(default_factory=dict)
     always_reference: bool = True
     open_timeout_s: float | None = None
+    devices: tuple[str, ...] = ("z", "xy", "highmag", "lowmag")
+    genicam_producer: Path | None = None
+
+
+class _UnavailableCameras(CameraBackend):
+    """Stands in for the camera driver when it cannot be loaded: every camera fails to open, with the reason."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def open_camera(self, name: str) -> CameraDevice:
+        raise CameraError(Code.CAMERA_SDK, f"camera '{name}': {self.reason}")
+
+    def close(self) -> None:
+        return None
 
 
 class Application:
@@ -61,10 +84,56 @@ class Application:
         self.config = config
         self.events = EventBus()
         self.settings = self._load_settings(config.alox_ini)
-        options = StageOptions(port_map=dict(config.port_map), always_reference=config.always_reference)
-        backend = build_stage_backend(simulate=config.simulate, simulation=SimulationOptions(stage=True))
-        self.z = ZStage(backend, self.settings.z, options, publish=self.events.publish)
-        self.devices: dict[str, Device] = {self.z.name: self.z}
+        self.typed_ini = TypedIni.load(config.alox_ini) if config.alox_ini and config.alox_ini.exists() else None
+        self.devices: dict[str, Device] = {}
+        self._camera_backend: CameraBackend | None = None
+        wanted = set(config.devices)
+        if "z" in wanted:
+            options = StageOptions(port_map=dict(config.port_map), always_reference=config.always_reference)
+            backend = build_stage_backend(simulate=config.simulate, simulation=SimulationOptions(stage=True))
+            self.add(ZStage(backend, self.settings.z, options, publish=self.events.publish))
+        if "xy" in wanted:
+            self.add(self._build_xy())
+        for name, camera_settings in (("highmag", self.settings.high_mag), ("lowmag", self.settings.low_mag)):
+            if name in wanted:
+                drives_lights = self.settings.light.connector.upper() == ("HM" if name == "highmag" else "LM")
+                self.add(Camera(self._cameras(), camera_settings, name=name,
+                                lights=self.settings.light if drives_lights else None, publish=self.events.publish))
+
+    def add(self, device: Device) -> Device:
+        self.devices[device.name] = device
+        return device
+
+    @property
+    def z(self) -> ZStage:
+        return self.devices["z"]                      # type: ignore[return-value]
+
+    def _build_xy(self) -> XYStage:
+        settings = load_xy_settings(self.typed_ini) if self.typed_ini is not None else XYSettings()
+        if self.config.simulate:
+            backends = build_xy_backends(simulate=True)
+        else:
+            from alox.devices.gcs_chain import GcsChain
+            port_name = f"COM{settings.x.com if settings.x.com > 0 else 1}"
+            port = self.config.port_map.get(port_name, port_name)
+            chain = GcsChain(port, settings.x.baudrate, 5.0)
+            backends = build_xy_backends(simulate=False, chain=chain)
+        options = StageOptions(port_map=dict(self.config.port_map), always_reference=False)
+        return XYStage(*backends, settings, options, publish=self.events.publish)
+
+    def _cameras(self) -> CameraBackend:
+        """One driver for both cameras: simulated, or the GenICam backend on the configured GenTL producer."""
+        if self._camera_backend is None:
+            if self.config.simulate:
+                self._camera_backend = SimCameraBackend(SimulationOptions(cameras=True))
+            else:
+                try:
+                    from alox.devices.camera_genicam import GenICamBackend
+                    self._camera_backend = GenICamBackend(self.config.genicam_producer)
+                except Exception as exc:                     # noqa: BLE001 - reported by the cameras' open
+                    log.error("camera driver unavailable: %s", exc)
+                    self._camera_backend = _UnavailableCameras(str(exc))
+        return self._camera_backend
 
     @staticmethod
     def _load_settings(path: Path | None) -> AloxSettings:
@@ -84,19 +153,30 @@ class Application:
 
     @staticmethod
     def _open_timeout(device: Device) -> float:
-        if isinstance(device, ZStage):                 # the set-up may include a reference move
-            return device.options.ready_timeout_s + device.options.wait_timeout_s
+        if isinstance(device, ZStage | XYStage):          # the set-up may include reference moves
+            return 2 * (device.options.ready_timeout_s + device.options.wait_timeout_s)
         return device.default_timeout_s
 
     def stop(self) -> None:
-        """Shut every device down (idempotent)."""
+        """Shut every device down (idempotent), then release the camera driver."""
         for device in self.devices.values():
             device.shutdown()
+        if self._camera_backend is not None:
+            try:
+                self._camera_backend.close()
+            except CameraError as exc:
+                log.warning("camera driver release failed: %s", exc)
 
     def status(self) -> dict[str, Any]:
         """Version and per-device status, for ``--check`` and later for the API."""
-        return {"version": __version__, "simulate": self.config.simulate,
-                "devices": {self.z.name: asdict(self.z.status(timeout=5.0))}}
+        devices: dict[str, Any] = {}
+        for name, device in self.devices.items():
+            reader = getattr(device, "status", None)
+            try:
+                devices[name] = asdict(reader()) if reader is not None else {"state": str(device.state)}
+            except Exception as exc:                         # noqa: BLE001 - a status must always be reported
+                devices[name] = {"state": str(device.state), "error": str(exc)}
+        return {"version": __version__, "simulate": self.config.simulate, "devices": devices}
 
     def __enter__(self) -> Self:
         return self
@@ -114,6 +194,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="map a COM port of alox.ini to another device or a pyserial URL (repeatable)")
     p.add_argument("--no-reference", action="store_true",
                    help="do not force a reference move at set-up when the axis is already referenced")
+    p.add_argument("--devices", default="z,xy,highmag,lowmag",
+                   help="comma-separated devices to use (default: z,xy,highmag,lowmag)")
+    p.add_argument("--genicam-producer", type=Path, help="GenTL producer (.cti) of the camera SDK (real cameras)")
     p.add_argument("--log-dir", type=Path, help="also write the log to daily files in this folder")
     p.add_argument("--log-level", default="INFO", help="DEBUG, INFO, WARNING, ERROR (default INFO)")
     p.add_argument("--check", action="store_true", help="open the devices, print their status as JSON and exit")
@@ -151,7 +234,9 @@ def _log_event(event: Event) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     _setup_logging(args.log_level, args.log_dir)
-    config = AppConfig(alox_ini=args.alox_ini, simulate=args.simulate, port_map=_port_map(args.port_map))
+    devices = tuple(d.strip().lower() for d in args.devices.split(",") if d.strip())
+    config = AppConfig(alox_ini=args.alox_ini, simulate=args.simulate, port_map=_port_map(args.port_map),
+                       devices=devices, genicam_producer=args.genicam_producer)
     if args.no_reference:
         config = replace(config, always_reference=False)
     log.info("alox %s starting (%s)", __version__, "simulation" if config.simulate else "hardware")

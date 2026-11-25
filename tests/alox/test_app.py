@@ -25,8 +25,16 @@ def _restore_logging():
     root.setLevel(level)
 
 
-def test_application_starts_the_simulated_z_stage():
+def test_application_starts_every_simulated_device():
     with Application(AppConfig(simulate=True)) as app:
+        assert app.start() == {"z": "ready", "xy": "ready", "highmag": "ready", "lowmag": "ready"}
+        status = app.status()["devices"]
+        assert status["xy"]["referenced"] is True and status["lowmag"]["acquiring"] is True
+        assert app.devices["highmag"].grab().pixels.ndim == 2
+
+
+def test_application_starts_the_simulated_z_stage():
+    with Application(AppConfig(simulate=True, devices=("z",))) as app:
         seen = app.events.subscribe(("device.z",))
         assert app.start() == {"z": "ready"}
         status = app.status()
@@ -43,14 +51,14 @@ def test_application_reads_the_z_settings_from_alox_ini(tmp_path: Path):
     ini = tmp_path / "alox.ini"
     ini.write_text("[hardware.z]\ncomport_I32 = 7\nspeed_DBL = 4,500000\nzmin_DBL = 1,000000\nzmax_DBL = 9,000000\n",
                    encoding="cp1252")
-    with Application(AppConfig(alox_ini=ini, simulate=True)) as app:
+    with Application(AppConfig(alox_ini=ini, simulate=True, devices=("z",))) as app:
         assert app.z.settings.com == 7
         assert app.z.settings.speed == pytest.approx(4.5)
         assert app.z.limits == (1.0, 9.0)
 
 
 def test_check_command_prints_the_status(capsys):
-    assert main(["--simulate", "--check", "--log-level", "WARNING"]) == 0
+    assert main(["--simulate", "--check", "--log-level", "WARNING", "--devices", "z"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["devices"]["z"]["state"] == "ready"
 
@@ -58,7 +66,8 @@ def test_check_command_prints_the_status(capsys):
 def test_check_fails_when_a_device_does_not_open(capsys, tmp_path: Path):
     """Real hardware on a port that does not exist: the device stays in fault, ``--check`` exits 1."""
     pytest.importorskip("serial")
-    code = main(["--check", "--log-level", "CRITICAL", "--port-map", f"COM2={tmp_path / 'no-such-port'}"])
+    code = main(["--check", "--log-level", "CRITICAL", "--devices", "z",
+                 "--port-map", f"COM2={tmp_path / 'no-such-port'}"])
     assert code == 1
     out = json.loads(capsys.readouterr().out)
     assert out["devices"]["z"]["state"] == "fault"
