@@ -1,9 +1,9 @@
 r"""Vision Core folders: ``alox_setup.ini [folders]`` → :class:`Folders`, and the folders the boot cycle creates.
 
 Spec: map Part 1 §4.4 (folders created at boot), §2.3 (boot frame 14), Part 4 §3.10 (folder resolvers), Part 4 §4
-(``alox_setup.ini``), "Owner's answers" §3.1 (the folders in effect come from ``alox_setup.ini [folders]``, read at every
-call; the code defaults are fallbacks only); docs/09-configuration-logging-errors.md §3 (resolver semantics, shared with
-the camera server: :mod:`aloxcam.config.folders`).
+(``alox_setup.ini``), "Owner's answers" §3.1 (the folders in effect come from ``alox_setup.ini [folders]``, read at
+every call; the code defaults are fallbacks only); docs/09-configuration-logging-errors.md §3 (resolver semantics,
+shared with the camera server: :mod:`aloxcam.config.folders`).
 
 Observed in the diagrams (they correct the comments quoted in map §4.4):
 

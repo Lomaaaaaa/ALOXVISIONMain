@@ -108,8 +108,9 @@ def extract_roi(img: np.ndarray, rect: Sequence[int] | None, clip_rect: bool = F
     """``IMAQ Extract 2`` with steps 1×1 (§4, §4.1). ``rect = [Left, Top, Right, Bottom]``, right and bottom edges
     excluded (inferred, A2). ``None`` or an empty array → the whole image, no extraction (Compare Aggregates with an
     empty array: ``[0, 0, 0, 0]`` is *not* empty). Any other rectangle is applied; one that is not 4 elements, empty
-    (``R ≤ L`` or ``B ≤ T``) or not inside the image raises :class:`FocusMetricError` (NI behaviour unknown, F12), unless
-    ``clip_rect`` first clips it to the image (the other candidate of test A2). Returns a view (never modified)."""
+    (``R ≤ L`` or ``B ≤ T``) or not inside the image raises :class:`FocusMetricError` (NI behaviour unknown, F12),
+    unless ``clip_rect`` first clips it to the image (the other candidate of test A2). Returns a view (never
+    modified)."""
     if rect is None or len(rect) == 0:
         return img
     if len(rect) != 4:
