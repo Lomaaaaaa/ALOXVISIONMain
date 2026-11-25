@@ -23,16 +23,26 @@ phase").
 
 ## The integrated application (`alox`)
 
-The package `alox` is the new Vision Core application. Phase 3 ([`docs/vision-core/phase3-skeleton.md`](docs/vision-core/phase3-skeleton.md))
-provides the skeleton: an event bus, the device framework (one worker thread per device, timeouts, reconnection, events),
-typed reading and editing of the LabVIEW INI files, and the Z stage as the first device.
+The package `alox` is the new Vision Core application: one process with the devices (Z stage, XY stages on the C-663
+daisy chain, monochromator, two GenICam cameras), the core (settings, recipes, statuses, command queue, measurement
+functions, hardware supervision) and the supervisor API (REST on port 8002, websocket events on port 6123, the same
+routes and JSON as LabVIEW). The plan and its progress are in
+[`docs/vision-core/migration-plan.md`](docs/vision-core/migration-plan.md); the questions waiting for the owner are in
+[`docs/vision-core/questions.md`](docs/vision-core/questions.md).
 
 ```sh
-alox --simulate --check
+pip install -e ".[stage,api]"
+alox --simulate --setup-ini D:\alox\alox_setup.ini
 ```
 
-`--check` opens every device, prints their status as JSON and exits; `--alox-ini PATH` reads the hardware settings of a
-real `alox.ini`; `--port-map COM2=socket://127.0.0.1:50000` connects the Z stage to the fake controller.
+- The folders come from `alox_setup.ini [folders]` (default `<exe>/alox_setup.ini`); `--settings-dir DIR` replaces
+  `[folders] settings`. At the first start `alox.ini` is created from `<exe>/alox_default.ini` and an empty profiles
+  folder gets the `DEFAULT` recipe.
+- `--simulate` replaces every device by its simulator; `--devices z,xy,wl,highmag,lowmag` chooses the devices;
+  `--port-map COM2=socket://127.0.0.1:50000` connects a COM port of `alox.ini` to an emulator or another port.
+- `--rest-port`, `--ws-port`, `--host` and `--no-api` set the API; the application runs until Ctrl+C or the
+  supervisor's `PUT /alox/v1/system/shutdown`.
+- `alox --simulate --check` only opens the devices, prints their status as JSON and exits (0 when all are ready).
 
 ## Documentation
 
