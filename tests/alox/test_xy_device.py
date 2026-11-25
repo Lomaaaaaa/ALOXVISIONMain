@@ -109,17 +109,20 @@ def test_move_without_wait(make_xy):
 
 
 # ============================================================================================== wafer checks
-def test_destination_outside_the_wafer_is_refused(make_xy):
+def test_destination_beyond_the_move_radius_is_refused(make_xy):
+    """LabVIEW refuses a destination more than 80 mm from the wafer origin; the diameter only enables the check."""
     xy, sx, sy = make_xy(wafer=WAFER)
     xy.move_absolute(100.0, 100.0)
-    assert xy.move_absolute(140.0, 120.0) == pytest.approx((140.0, 120.0))      # distance 44.7 ≤ 50
+    assert xy.move_absolute(160.0, 100.0) == pytest.approx((160.0, 100.0))      # 60 mm: beyond the radius, accepted
     with pytest.raises(DeviceError) as info:
-        xy.move_absolute(160.0, 100.0)                                          # 60 > 50
+        xy.move_absolute(190.0, 100.0)                                          # 90 mm > 80 mm
     assert info.value.code == OUTSIDE_WAFER
-    assert (sx.position, sy.position) == pytest.approx((140.0, 120.0))
+    assert (sx.position, sy.position) == pytest.approx((160.0, 100.0))
     with pytest.raises(DeviceError) as info:
-        xy.move_relative(dx=20.0)                                               # 160, 120
+        xy.move_relative(dx=25.0)                                               # 185, 100
     assert info.value.code == OUTSIDE_WAFER
+    xy.set_wafer(move_radius_mm=95.0)
+    assert xy.move_relative(dx=25.0) == pytest.approx((185.0, 100.0))
 
 
 def test_undefined_wafer_accepts_every_destination(make_xy):
@@ -142,17 +145,40 @@ def test_wafer_settings_change_in_memory(make_xy):
         xy.set_wafer(check_period_ms=0)
 
 
-def test_wafer_limit_check_stops_the_stages_and_the_joystick(make_xy, events):
+def test_wafer_limit_check_stops_joystick_motion_outside_the_wafer(make_xy, events):
     xy, sx, _ = make_xy(wafer=WAFER)
     xy.move_absolute(100.0, 100.0)
     assert xy.call("check", xy.check_wafer_limits) is True
     sx.mov("1", 180.0)                                    # X driven off the wafer behind the device's back
     xy.wait_end_move()
-    xy.set_joystick(True)                                 # (the joystick refuses MOV, so it is enabled afterwards)
+    assert xy.call("check", xy.check_wafer_limits) is False                     # outside, joystick off, still
+    assert "device.xy.wafer_limit" not in topics(events)
+    xy.set_joystick(True)
+    assert xy.call("check", xy.check_wafer_limits) is False                     # joystick on: stop
+    assert xy.call("check", xy.check_wafer_limits) is False
+    limit = [e for e in events if e.topic == "device.xy.wafer_limit"]
+    assert len(limit) == 1 and limit[0].data["x"] > 150.0 and limit[0].data["joystick"] is True
+    assert xy.joystick_enabled()                          # LabVIEW leaves the joystick on
+
+
+def test_wafer_limit_can_also_switch_the_joystick_off(make_xy):
+    xy, sx, _ = make_xy(wafer=WAFER, disable_joystick_on_limit=True)
+    xy.move_absolute(100.0, 100.0)
+    sx.mov("1", 180.0)
+    xy.wait_end_move()
+    xy.set_joystick(True)
     assert xy.call("check", xy.check_wafer_limits) is False
     assert not xy.joystick_enabled()
-    limit = [e for e in events if e.topic == "device.xy.wafer_limit"]
-    assert limit and limit[0].data["x"] > 150.0
+
+
+def test_a_commanded_move_back_onto_the_wafer_is_not_stopped(make_xy):
+    """LabVIEW stopped it too, so the stage stayed stuck outside (xy-stage.md X3)."""
+    xy, _, _ = make_xy(wafer=WAFER)
+    xy.move_absolute(160.0, 100.0)                         # accepted (≤ 80 mm) but outside the 50 mm zone
+    xy.move_absolute(110.0, 100.0, wait=False)
+    assert xy.call("check", xy.check_wafer_limits) is False                     # still outside, moving: left alone
+    xy.wait_end_move()
+    assert xy.position() == pytest.approx((110.0, 100.0))
 
 
 def test_wafer_limit_supervision_runs_in_the_background(make_xy, events):
@@ -276,7 +302,7 @@ def test_xy_on_the_real_driver_through_the_daisy_chain(events):
         assert xy.is_referenced()
         assert xy.move_absolute(100.0, 110.0, timeout=20) == pytest.approx((100.0, 110.0), abs=1e-3)
         with pytest.raises(DeviceError) as info:
-            xy.move_absolute(180.0, 100.0, timeout=20)
+            xy.move_absolute(190.0, 100.0, timeout=20)                         # 90 mm > 80 mm
         assert info.value.code == OUTSIDE_WAFER
     finally:
         xy.shutdown(timeout=5)

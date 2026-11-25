@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,7 +11,7 @@ import pytest
 from alox.core.log import AppLog, LogLevel, daily_file_name, format_line
 from alox.core.translations import Translations
 
-T0 = datetime(2026, 11, 25, 8, 5, 3, 45678)
+T0 = datetime(2026, 11, 25, 8, 5, 3, 45678, tzinfo=UTC)
 
 
 class Clock:
@@ -31,7 +31,7 @@ class Clock:
 def test_line_format():
     assert format_line(T0, "Info", "hello") == "25/11/2026 - 08:05:03,045 - Info -- hello"
     assert format_line(T0, "Error", "x", decimal_separator=".") == "25/11/2026 - 08:05:03.045 - Error -- x"
-    assert format_line(datetime(2026, 1, 2, 23, 59, 59, 999999), "Warning", "") == (
+    assert format_line(datetime(2026, 1, 2, 23, 59, 59, 999999, tzinfo=UTC), "Warning", "") == (
         "02/01/2026 - 23:59:59,999 - Warning -- ")                  # truncated, never ",1000"
     assert daily_file_name(T0) == "261125_vision_events.log"
 
@@ -103,7 +103,7 @@ def test_daily_file(tmp_path: Path):
     log = AppLog(clock=clock, daily_dir=logs)
     log.info("première")
     log.error("second")
-    clock.now = datetime(2026, 11, 26, 0, 0, 1)
+    clock.now = datetime(2026, 11, 26, 0, 0, 1, tzinfo=UTC)
     log.info("next day")
     first = (logs / "261125_vision_events.log").read_bytes()
     assert first == ("25/11/2026 - 08:05:03,045 - Info -- première\r\n"

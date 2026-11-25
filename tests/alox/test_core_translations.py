@@ -131,11 +131,17 @@ def test_language_switch(folder: Path):
 
 
 def test_missing_language_file_uses_english(folder: Path, caplog: pytest.LogCaptureFixture):
-    with caplog.at_level(logging.WARNING, logger="alox.core.translations"):
+    with caplog.at_level(logging.INFO, logger="alox.core.translations"):
         tr = Translations(folder, "de")
     assert tr.language == "de"
     assert tr.text(12) == "Warning"
     assert "alox_de.lang" in caplog.text
+    (folder / "tilt_en.lang").unlink()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="alox.core.translations"):
+        tr.set_language("de")
+    assert "tilt_en.lang" in caplog.text and "alox_de.lang" not in caplog.text
+    assert tr.text(0, domain="tilt") == "000000"
 
 
 def test_invalid_language_and_domain(folder: Path):

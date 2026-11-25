@@ -62,26 +62,37 @@ class XYAxisSettings:
 
 @dataclass(frozen=True)
 class WaferSettings:
-    """The wafer used for the inside-wafer checks. A diameter or an origin of 0 means "undefined": every position is
-    accepted, as in LabVIEW."""
+    """The wafer used by the two checks (``docs/vision-core/xy-stage.md`` §5, §6). A diameter or an origin of 0 means
+    "undefined": every position is accepted, as in LabVIEW.
+
+    - Before a move, the destination must be within ``move_radius_mm`` of the wafer origin. LabVIEW hard-wires 80 mm
+      (``alox_xy_check_wafer position d0``; the diameter only switches the check on); the radius in the deployed
+      executable is an open question (xy-stage.md Q4), hence the setting.
+    - The periodic supervision stops the stages beyond ``diameter_mm / 2``.
+    """
 
     diameter_mm: float = 100.0
     origin: tuple[float, float] = (0.0, 0.0)
     chuck_origin: tuple[float, float] = (0.0, 0.0)
     limits_enabled: bool = False
     check_period_ms: int = 500
-    margin_mm: float = 0.0
+    move_radius_mm: float = 80.0
 
     @property
     def defined(self) -> bool:
-        return self.diameter_mm != 0.0 and self.origin != (0.0, 0.0)
+        return self.diameter_mm != 0.0 and self.origin[0] != 0.0 and self.origin[1] != 0.0
+
+    def _distance(self, x: float, y: float) -> float:
+        ox, oy = self.origin
+        return math.hypot(ox - x, oy - y)
 
     def inside(self, x: float, y: float) -> bool:
-        """``sqrt((Xorg − x)² + (Yorg − y)²) ≤ diameter / 2 + margin``; TRUE when the wafer is undefined."""
-        if not self.defined:
-            return True
-        ox, oy = self.origin
-        return math.hypot(ox - x, oy - y) <= self.diameter_mm * 0.5 + self.margin_mm
+        """Supervision zone: distance to the origin ≤ diameter / 2 (TRUE when the wafer is undefined)."""
+        return not self.defined or self._distance(x, y) <= self.diameter_mm * 0.5
+
+    def move_allowed(self, x: float, y: float) -> bool:
+        """Move check: distance to the origin ≤ ``move_radius_mm`` (TRUE when the wafer is undefined)."""
+        return not self.defined or self._distance(x, y) <= self.move_radius_mm
 
 
 @dataclass(frozen=True)
@@ -154,7 +165,8 @@ class XYStage(Device):
     def __init__(self, backend_x: StageBackend, backend_y: StageBackend, settings: XYSettings | None = None,
                  options: StageOptions | None = None, *, name: str = "xy", publish: Publish | None = None,
                  sleep: Callable[[float], None] | None = None, monotonic: Callable[[], float] | None = None,
-                 supervise: bool = True, on_target_tolerance_mm: float = 0.01, **device_options: Any) -> None:
+                 supervise: bool = True, on_target_tolerance_mm: float = 0.01,
+                 disable_joystick_on_limit: bool = False, **device_options: Any) -> None:
         self.options = options or StageOptions(always_reference=False)
         kwargs: dict[str, Any] = {}
         if sleep is not None:
@@ -166,6 +178,9 @@ class XYStage(Device):
         self._settings = settings or XYSettings()
         self.supervise = supervise
         self.on_target_tolerance_mm = on_target_tolerance_mm
+        self.disable_joystick_on_limit = disable_joystick_on_limit
+        self._commanded_move = False
+        self._outside_reported = False
         self._supervisor: threading.Thread | None = None
         self._supervisor_stop = threading.Event()
         self._check_pending = threading.Event()
@@ -185,8 +200,8 @@ class XYStage(Device):
 
     def set_wafer(self, **changes: Any) -> None:
         """Change wafer values in memory (``diameter_mm``, ``origin``, ``chuck_origin``, ``limits_enabled``,
-        ``check_period_ms``, ``margin_mm``), as the Set Wafer … commands; the INI is not written."""
-        for key in ("diameter_mm", "margin_mm"):
+        ``check_period_ms``, ``move_radius_mm``), as the Set Wafer … commands; the INI is not written."""
+        for key in ("diameter_mm", "move_radius_mm"):
             if key in changes and not math.isfinite(changes[key]):
                 raise DeviceError(self.name, f"set wafer: {key} must be finite", code=int(Code.LV_INVALID_INPUT))
         if "check_period_ms" in changes and int(changes["check_period_ms"]) <= 0:
@@ -318,6 +333,7 @@ class XYStage(Device):
             current = self._read_position()
             dest = (current[0] if x is None else x, current[1] if y is None else y)
             self._check_destination(dest, "move absolute")
+            self._commanded_move = True
             for name, value in (("x", x), ("y", y)):
                 if value is not None:
                     self.controllers[name].mov(value)
@@ -334,6 +350,7 @@ class XYStage(Device):
             current = self._read_position()
             dest = (current[0] + dx, current[1] + dy)
             self._check_destination(dest, "move relative")
+            self._commanded_move = True
             for name, delta in (("x", dx), ("y", dy)):
                 if delta:
                     self.controllers[name].mvr(delta)
@@ -449,15 +466,16 @@ class XYStage(Device):
     def _check_destination(self, dest: tuple[float, float], label: str) -> None:
         if not all(math.isfinite(v) for v in dest):
             raise DeviceError(self.name, f"{label}: destination must be finite", code=int(Code.LV_INVALID_INPUT))
-        if not self.inside_wafer(*dest):
-            raise DeviceError(self.name, f"{label}: destination ({dest[0]:g}, {dest[1]:g}) mm outside the wafer",
-                              code=OUTSIDE_WAFER)
+        if not self.wafer.move_allowed(*dest):
+            raise DeviceError(self.name, f"{label}: destination ({dest[0]:g}, {dest[1]:g}) mm outside the wafer "
+                              f"(more than {self.wafer.move_radius_mm:g} mm from its origin)", code=OUTSIDE_WAFER)
 
     def _finish(self, dest: tuple[float, float], wait: bool) -> tuple[float, float]:
         if not wait:
             return dest
         for name in AXES:
             self.controllers[name].general_wait(polling_ms=10, timeout_s=self.options.wait_timeout_s)
+        self._commanded_move = False
         for name in AXES:
             self.controllers[name].check_error()
         position = self._read_position()
@@ -509,18 +527,35 @@ class XYStage(Device):
                 self._check_pending.clear()
 
     def check_wafer_limits(self) -> bool:
-        """One supervision step (worker thread): ``POS?`` X and Y; outside the wafer → ``STP``, ``ERR?`` and joystick
-        off on both axes, event ``wafer_limit``. Returns whether the position was inside."""
+        """One supervision step (worker thread); returns whether the position is inside the supervision zone.
+
+        Outside the zone, the stages are stopped (``STP`` and ``ERR?`` on both axes) when the joystick is on, or when
+        they move without a commanded move in progress. A commanded move is left alone, so the stage can be brought
+        back onto the wafer (LabVIEW stopped it too and the stage stayed stuck outside: xy-stage.md X3). The joystick
+        stays on unless ``disable_joystick_on_limit`` (LabVIEW's ``JON 0`` is disabled code, xy-stage.md §6). The
+        event ``wafer_limit`` is published once per excursion."""
         x, y = self._read_position()
         if self.inside_wafer(x, y):
+            self._outside_reported = False
             return True
-        log.warning("%s: position (%g, %g) mm outside the wafer: stopping the stages and the joystick", self.name, x, y)
+        moving = any(self.controllers[name].is_moving() for name in AXES)
+        if not moving:
+            self._commanded_move = False
+        joystick = self.controllers["x"].qjon(1)
+        if not (joystick or (moving and not self._commanded_move)):
+            return False
+        log.warning("%s: position (%g, %g) mm outside the wafer: stopping the stages", self.name, x, y)
         for name in AXES:
             controller = self.controllers[name]
-            for step in (controller.stp, controller.check_error, lambda c=controller: c.jon(1, False)):
+            steps: list[Callable[[], object]] = [controller.stp, controller.check_error]
+            if self.disable_joystick_on_limit:
+                steps.append(lambda c=controller: c.jon(1, False))
+            for step in steps:
                 try:
                     step()
                 except StageError as exc:
                     log.debug("%s: wafer-limit stop step failed on %s (cleared): %s", self.name, name, exc)
-        self.emit("wafer_limit", x=x, y=y)
+        if not self._outside_reported:
+            self._outside_reported = True
+            self.emit("wafer_limit", x=x, y=y, joystick=joystick)
         return False

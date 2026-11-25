@@ -7,8 +7,8 @@ Password. Observed in ``alox_manager_users d0..d179``:
 - Login / Check Password read the property ``user.password.<operator|engineer|administrator>`` (note: **administrator**
   for the Admin user, while the rights use ``admin``), Base64-decode it and compare it with the typed password; Login
   changes the current user only on success; a failure returns an error status (d0, d6, d7..d10, d175..d178).
-- User Rights reads the Boolean property ``user.rights.<admin|engineer|operator>.<action>`` (default FALSE), ``<action>``
-  being the label of ``alox_typedef_user_action`` in lower case without spaces ("Auto Exposure Setup" →
+- User Rights reads the Boolean property ``user.rights.<admin|engineer|operator>.<action>`` (default FALSE),
+  ``<action>`` being the label of ``alox_typedef_user_action`` in lower case without spaces ("Auto Exposure Setup" →
   ``autoexposuresetup``, d12..d173). An unknown action or user gives error 9002 "Invalid Args" and no right.
 - ``alox_default.ini`` also holds nine rights ``properties<tab>`` (admin, camera, chamber, datalogging, modules,
   monochromator, network, overlays, xyzstages) used by the properties UI (**inferred**): :meth:`Users.has_tab_right`.

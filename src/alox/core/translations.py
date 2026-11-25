@@ -40,7 +40,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-__all__ = ["DEFAULT_LANGUAGE", "DOMAINS", "Translations", "code_id", "decode_lang_bytes", "parse_lang", "read_lang_file"]
+__all__ = ["DEFAULT_LANGUAGE", "DOMAINS", "Translations", "code_id", "decode_lang_bytes", "parse_lang",
+           "read_lang_file"]
 
 log = logging.getLogger(__name__)
 
@@ -138,8 +139,8 @@ class Translations:
 
     def set_language(self, language: str) -> None:
         """Switch to ``language``: read ``<domain>_en.lang`` and ``<domain>_<language>.lang`` of every domain from the
-        folder. A missing file is logged and leaves that table empty (English is then used, as LabVIEW does). Tables
-        added with :meth:`load_text` for other languages are dropped."""
+        folder. A missing file is logged (a warning for English) and leaves that table empty (English is then used, as
+        LabVIEW does). Tables added with :meth:`load_text` for other languages are dropped."""
         language = _check_language(language)
         tables: dict[tuple[str, str], dict[int, str]] = {}
         loaded: list[Path] = []
@@ -150,7 +151,8 @@ class Translations:
                     try:
                         tables[(domain, lang)] = read_lang_file(path)
                     except FileNotFoundError:
-                        log.warning("language file %s not found", path)
+                        # only English files exist for the status families: a missing translation is normal
+                        (log.warning if lang == DEFAULT_LANGUAGE else log.info)("language file %s not found", path)
                         continue
                     except OSError as exc:
                         log.warning("cannot read language file %s: %s", path, exc)
