@@ -11,7 +11,7 @@ The detailed context is in the referenced documents.
 | H1 | Z stage: results of `tools/z_stage_check.py` (information, then motion) | camera-server Z behaviour | docs/phase2-notes.md |
 | H2 | XY daisy chain: which address form and single-character mode the C-663 chain accepts (`target_only` / `target_sender`, `#5`/`#7` addressed or `SRG?`), and the stage models (`CST?`) | `target_only`, addressed single characters | `tools/xy_stage_check.py`, xy-stage.md Q2 |
 | H3 | Monochromator model (CM110 or CM112), gratings, COM port; protocol details of Appendix K of its manual | CM11x protocol as read in the diagrams | `tools/wl_check.py`, monochromator.md Q1, Q2, Q8 |
-| H4 | Cameras: model and GenICam feature names, pixel format, packet size, I/O lines; GenTL producer path on the PC | IDS GigE, Mono8, names mapped from IMAQdx | camera_genicam.py docstring |
+| H4 | Cameras: GenICam feature names on the GV-528x-M (`ExposureTime` µs, `Gain` as a factor so the INI gain type should be DBL, frame-rate enable, `DeviceTemperature` selector), Mono8 at 2448×2048, jumbo frames for packet size 8996, the integer values of the I/O line entries and the LED/bulb wiring, the IDS GenTL producer path on the PC, and the camera settings to save as a UserSet (NI MAX camera files are not used any more) | IDS GigE, Mono8, names mapped from IMAQdx | `tools/camera_check.py`, camera_genicam.py docstring |
 
 ## Behaviour to decide
 
