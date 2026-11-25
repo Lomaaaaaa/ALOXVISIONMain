@@ -53,5 +53,5 @@ checked for consistency with the other chapters.
 
 ## Vision Core
 
-Source material for the migration of the whole Vision Core application (decoded typedefs, REST API routes):
+Map and source material for the migration of the whole Vision Core application ([map](vision-core/map.md), decoded typedefs, call graph, REST API routes):
 [vision-core/README.md](vision-core/README.md). The export procedure is in [labview-export-procedure.md](labview-export-procedure.md).
