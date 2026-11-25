@@ -173,6 +173,18 @@ The full lists are at the end of each part ("Open questions"). The decisions tha
 7. **File formats:** keep `.foc`/`.focf` binary files, PNG custom data, zip recipes and the INI format for compatibility with
    existing data, or convert them?
 
+### 3.1 Owner's answers on the defects (25/11/2026)
+
+| Point | Owner's answer | Decision for the rewrite |
+|---|---|---|
+| The exit cycle empties `%LOCALAPPDATA%\Temp` (Part 1, frame 10) | Intentional, to prevent a LabVIEW error | A LabVIEW workaround: not reproduced. The new application only removes its own temporary files. |
+| `GET /v1/system/version` enqueues `Abort` (Part 5, note 8) | Unknown | **Confirmed in the diagram** (`alox_api_v1_get_system_version d`): an `Alox Queue Item` with Method `Abort` is enqueued into the core process queue on every call, with no condition; the core handles `Abort` as an emergency stop of all running functions. Most likely a copy-paste from `put_functions_abort`. Not reproduced: `version` becomes read-only. |
+| The "RANSAC" line fit cannot return a horizontal or vertical line (Part 4) | Confirmed; it would crash the process | Fixed: a line fit that handles every orientation (normal-form or total-least-squares model inside a real RANSAC that maximises inliers). |
+| The watchdog restarts `Alox.exe` instead of `AloxVision.exe` (Part 2, 2.6) | The watchdog is not used | AloxWatchdog is out of the migration scope. |
+| An XY move silently re-homes both axes when a reference is lost (Part 2) | Unknown, but the behaviour is welcome | Kept, but made visible: the re-homing is logged and reported as an event/status. |
+| Duplicate keys in the bowing JSON (`bowinga` twice, `parallelismb` twice; Part 5, note 7) | Should be corrected | Corrected to `bowinga`/`bowingb` and `parallelisma`/`parallelismb` (cluster order). Check the supervisor first: a standard JSON parser keeps the last duplicate, so today it reads the second value under `bowinga` and `parallelismb`. |
+| Ports and folders that disagree between code and INI files | Use the value that is really in effect | The rewrite keeps the value the running program actually uses: REST port **8002** (build setting; the INI key `[webservice] port = 8001` is not read by the service), websocket **6123**, WL server **505** (both the server and the manager read `[hardware.monochromator] port`, the shipped INI says 505; 502 is only the code default), folders from `alox_setup.ini [folders]` (read at every call; the code defaults are fallbacks only). Defaults live in one place in the new code. |
+
 ---
 
 ## Part 1: Core application skeleton (`AloxVision.exe`)
