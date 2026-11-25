@@ -2,6 +2,10 @@
 
 ## Summary
 
+> **Superseded in scope (25/11/2026).** The owner decided to migrate the whole Vision Core application as one integrated
+> application, without separate hardware servers: see [`vision-core/migration-plan.md`](vision-core/migration-plan.md). The
+> camera, Z-stage and focus specifications of chapters 01–09 still apply; the TCP-server parts of this plan are kept as reference.
+
 This chapter turns the analysis (chapters 01–09) into a plan for rewriting the LabVIEW **Alox Camera Server** in another language.
 
 - **Recommendation:** rewrite it in **Python 3.11+**. Use NumPy/OpenCV for images, PI's official `pipython` for the Z stage, a

@@ -16,6 +16,11 @@ and Z stage, a protocol client library and a replay tool. **Phase 2** adds the r
 refocus jobs come in phase 4; until then `Cam Autofocus` and `Cam Refocus` reply error 9507 ("not implemented in this
 phase").
 
+> **Direction change (25/11/2026).** The whole ALOX Vision Core application is now being migrated as **one integrated
+> application**, without separate hardware servers ([`docs/vision-core/migration-plan.md`](docs/vision-core/migration-plan.md)).
+> The camera server is therefore not completed as a server: its Z-stage driver, simulators, configuration reader, event log
+> and focus metrics are reused as modules of the new application, and the TCP server stays as reference and test tooling.
+
 ## Documentation
 
 The LabVIEW code has been analysed into a specification for the re-implementation. It is in [`docs/`](docs/README.md).

@@ -164,6 +164,7 @@ The full lists are at the end of each part ("Open questions"). The decisions tha
 1. **Keep the REST/websocket API exactly** (query parameters, plain-text PUT replies, status codes, key names, port 8002/6123,
    lossy events) or design a new version with a compatibility layer?
 2. **Keep the four processes** (main + three hardware servers on localhost TCP) or merge the hardware drivers into one service?
+   **Decided (25/11/2026): one integrated application without hardware servers** ([migration plan](migration-plan.md)).
 3. **Defects:** which ones to reproduce for compatibility and which to fix (RANSAC fit, Temp-folder deletion, `version` →
    `Abort`, duplicate JSON keys, watchdog executable name, silent re-homing)?
 4. **Licensing:** keep the WireFlow dongle and the virtual-dongle file, or replace them?
