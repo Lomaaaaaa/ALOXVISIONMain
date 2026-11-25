@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-_URGENT, _NORMAL = 0, 1
+_URGENT, _NORMAL, _STOP = 0, 1, 2
 
 
 class DeviceState(StrEnum):
@@ -91,12 +91,13 @@ class Device:
         self.reconnect_delay_s = reconnect_delay_s
         self._publish = publish
         self._sleep = sleep
-        self._queue: queue.PriorityQueue[_Item | None] = queue.PriorityQueue()
+        self._queue: queue.PriorityQueue[_Item] = queue.PriorityQueue()
         self._seq = itertools.count()
         self._state_lock = threading.Lock()
         self._state = DeviceState.CLOSED
         self._last_error: DeviceError | None = None
         self._thread: threading.Thread | None = None
+        self._start_lock = threading.Lock()
         self._current: str | None = None
 
     # ============================================================================================== state
@@ -138,14 +139,17 @@ class Device:
     # ============================================================================================== life cycle
     def start(self) -> None:
         """Start the worker thread (idempotent). The device stays ``closed`` until :meth:`open`."""
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(target=self._worker, name=f"device-{self.name}", daemon=True)
-        self._thread.start()
+        with self._start_lock:                                # two concurrent opens must not start two workers
+            if self._thread is not None:
+                return
+            self._thread = threading.Thread(target=self._worker, name=f"device-{self.name}", daemon=True)
+            self._thread.start()
 
     def open(self, timeout: float | None = None) -> None:
         """Open the device (run :meth:`_open` in the worker): ``ready`` on success, ``fault`` and :class:`DeviceError`
         on failure. Starts the worker if needed."""
+        if self.state == DeviceState.SHUTDOWN:                # final: never re-open the hardware
+            raise DeviceNotReady(self.name, "open: device shut down")
         self.start()
         self._wait(self._enqueue("open", self._do_open, _NORMAL, needs_ready=False), "open", timeout)
 
@@ -164,7 +168,8 @@ class Device:
                 self.close(timeout=timeout)
             except DeviceError as exc:
                 log.warning("%s: close at shutdown failed: %s", self.name, exc)
-            self._queue.put(None)
+            # a stop item, not None: None cannot be ordered against the items still queued (a stuck close)
+            self._queue.put(_Item(_STOP, next(self._seq), "stop", lambda: None, Future()))
             self._thread.join(timeout)
         self._set_state(DeviceState.SHUTDOWN)          # emits the state event once; SHUTDOWN is final
 
@@ -205,6 +210,8 @@ class Device:
         except FutureTimeout:
             if future.cancel():                               # still queued: it will not run
                 message = f"{what}: not started within {limit:g} s (device busy with {self._current!r})"
+            elif future.done():                               # finished as the wait expired: nothing to interrupt
+                return future.result()
             else:
                 message = f"{what}: no result within {limit:g} s"
                 try:
@@ -218,7 +225,7 @@ class Device:
     def _worker(self) -> None:
         while True:
             item = self._queue.get()
-            if item is None:
+            if item.priority == _STOP:                        # after every queued operation
                 return
             if not item.future.set_running_or_notify_cancel():
                 continue
