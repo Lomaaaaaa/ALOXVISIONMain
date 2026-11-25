@@ -10,8 +10,9 @@ requires-python = ">=3.11"
 dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
-stage = ["pyserial>=3.5"]         # the real PI Z stage (phase 2); pipython is not used
-dev = ["pytest>=7.4", "pyserial>=3.5"]   # camera SDK extras are added in phase 3
+stage = ["pyserial>=3.5"]         # the PI stages (Z, XY); pipython is not used
+api = ["fastapi>=0.110", "uvicorn>=0.29", "websockets>=12"]   # REST (8002) and websocket (6123) for the supervisor
+dev = ["pytest>=7.4", "pyserial>=3.5", "fastapi>=0.110", "uvicorn>=0.29", "websockets>=12", "httpx>=0.27"]
 
 [project.scripts]
 alox = "alox.app:main"
