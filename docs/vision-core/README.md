@@ -28,5 +28,5 @@ its typedef name). Some array elements and cluster fields have no label in LabVI
 ## Not in the repository
 
 The HTML export of the 747 VIs (one page per VI, every hidden case frame as an image; about 150 MB) and the text sources
-(`alox.lvproj`, INI files, Python/C code, translations) were received during the analysis session but are not committed:
-they are large, and `alox_default.ini` contains user passwords in clear text.
+(`alox.lvproj`, INI files, Python/C code, translations) were received during the analysis session but are not committed
+yet (the HTML export is too large for the repository).
