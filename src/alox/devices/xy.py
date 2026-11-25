@@ -144,10 +144,11 @@ class XYStatus:
     identities: tuple[str, str]
 
 
-def build_xy_backends(*, simulate: bool, chain: Any = None,
-                      simulation: SimulationOptions | None = None) -> tuple[StageBackend, StageBackend]:
+def build_xy_backends(*, simulate: bool, chain: Any = None, simulation: SimulationOptions | None = None,
+                      devices: tuple[int, int] = (1, 2)) -> tuple[StageBackend, StageBackend]:
     """``(x, y)`` backends: two ``SimStage`` in simulation; otherwise two ``PiSerialStage`` on views of ``chain``
-    (an :class:`alox.devices.gcs_chain.GcsChain`; device numbers 1 and 2)."""
+    (an :class:`alox.devices.gcs_chain.GcsChain`) at the daisy-chain device numbers ``devices`` (``alox.ini``
+    ``[hardware.xy] xaxis``/``yaxis``, 1 and 2 by default)."""
     if simulate:
         from aloxcam.zstage.sim import SimStage
         options = simulation or SimulationOptions(stage_min_mm=0.0, stage_max_mm=200.0)
@@ -155,7 +156,10 @@ def build_xy_backends(*, simulate: bool, chain: Any = None,
     if chain is None:
         raise ValueError("a GcsChain is needed for the real XY stages")
     from aloxcam.zstage.pi_serial import PiSerialStage
-    return PiSerialStage(link_factory=chain.link_factory(1)), PiSerialStage(link_factory=chain.link_factory(2))
+    x, y = devices
+    if x == y:
+        raise ValueError(f"the X and Y stages cannot share the device number {x}")
+    return PiSerialStage(link_factory=chain.link_factory(x)), PiSerialStage(link_factory=chain.link_factory(y))
 
 
 class XYStage(Device):

@@ -270,7 +270,14 @@ class FakeDaisyChain:
         words = command.split()
         if words[0].upper() == "SRG?":
             return self._srg(address, words[1:])
+        if words[0].upper() == "JBS?":
+            return self._jbs(words[1:])
         return self._feed_device(address, (command + "\n").encode(self._encoding, errors="replace"))
+
+    def _jbs(self, args: list[str]) -> bytes:
+        """``JBS? <joystick> <axis>``: the joystick button, never pressed here."""
+        pairs = list(zip(args[0::2], args[1::2], strict=False)) or [("1", "1")]
+        return (" \n".join(f"{joystick} {axis}=0" for joystick, axis in pairs) + "\n").encode(self._encoding)
 
     def _srg(self, address: int, args: list[str]) -> bytes:
         model = self._devices[address].model

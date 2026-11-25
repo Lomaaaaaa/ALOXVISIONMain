@@ -190,6 +190,46 @@ camera server stopped** (it keeps the COM port open). `D:\alox\settings` is the 
 `py -3 tools\z_stage_check.py --fake --motion --yes` rehearses everything against an emulated controller, without
 hardware.
 
+### Check the XY stages
+
+`tools/xy_stage_check.py` checks the two XY controllers (PI C-663, X = device 1, Y = device 2 on one RS-232 daisy
+chain) through the integrated application's own code (`alox.devices.gcs_chain`, `alox.devices.xy`). First it finds out
+how the controllers want to be addressed on the shared port (target address alone or with the sender address; whether
+the single-byte commands `#5` / `#7` can be addressed or must be replaced by `SRG? 1 1`), then it reads both
+controllers. Same requirements as the Z check; run it **with the LabVIEW XY server (AloxXYServer.exe) stopped** (it
+keeps the COM port open). The port, baud rate and device numbers come from `alox.ini` `[hardware.xy]` (`comport_I32`,
+`baudrate_I32`, `xaxis_I32`, `yaxis_I32`); `--port COM3` can replace `--alox-ini`.
+
+1. **Information first.** Read-only: nothing moves, no setting changes.
+
+   ```bat
+   py -3 tools\xy_stage_check.py --alox-ini D:\alox\settings\alox.ini
+   ```
+
+   It prints the daisy-chain variant found (`DAISY-CHAIN VARIANT: GcsChain(..., address_mode=..., char_mode=...)`)
+   and, per controller, `*IDN?`, `CST? 1` (stage model), the travel range, the reference and limit switches, the
+   reference state, position, speed, servo, joystick (`JON? 1`, and `JBS? 1 1` on X) and `ERR?`. `--help` lists every
+   frame.
+2. **Motion tests, only when the stage area is safe**: nothing on or near the stages that a move can hit, and the
+   controllers' power switch within reach.
+
+   ```bat
+   py -3 tools\xy_stage_check.py --alox-ini D:\alox\settings\alox.ini --motion
+   ```
+
+   Each step needs a typed `yes`: the set-up through the application's XY device (servo on; an axis that is not
+   referenced is referenced only after a second `yes`, and that drives it to a switch), ±1 mm relative moves on X and
+   on Y at 1 mm/s with position checks, a move that must be refused because it leaves a tiny test wafer, and `STP`
+   during a move. Moves stay within ±1 mm of the start position (`--window`) and the `alox.ini` `xmin`/`xmax`,
+   `ymin`/`ymax`; Ctrl+C, an error or a timeout sends `#24` (stop all axes) to both controllers. At the end the tool
+   offers to move the stages back and restores their speeds.
+3. **Send back** the `xy_stage_report_<date>-<time>.json` file named on the last lines of the output (written in
+   `tools\`, or in `--out <folder>`); the `.txt` next to it is the same report, easier to read. Its first lines give the
+   daisy-chain settings the application must use.
+
+`py -3 tools\xy_stage_check.py --fake --motion --yes` rehearses everything against two emulated controllers;
+`--fake-address-mode target_sender --fake-char-mode text_equivalents` makes them speak the other variant.
+
 ### Rehearsal with the fake controller
 
 `aloxcam.zstage.fake_c663` emulates a C-663 on a TCP port (the simulated stage behind the real serial protocol). It

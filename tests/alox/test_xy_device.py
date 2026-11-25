@@ -307,3 +307,21 @@ def test_xy_on_the_real_driver_through_the_daisy_chain(events):
     finally:
         xy.shutdown(timeout=5)
         server.close()
+
+
+def test_xy_backends_use_the_configured_device_numbers():
+    """``[hardware.xy] xaxis``/``yaxis`` choose the controllers on the chain (not always 1 and 2)."""
+
+    class Chain:
+        def __init__(self) -> None:
+            self.asked: list[int] = []
+
+        def link_factory(self, address: int) -> Callable[[], Any]:
+            self.asked.append(address)
+            return lambda: None
+
+    chain = Chain()
+    build_xy_backends(simulate=False, chain=chain, devices=(3, 1))
+    assert chain.asked == [3, 1]
+    with pytest.raises(ValueError):
+        build_xy_backends(simulate=False, chain=chain, devices=(2, 2))

@@ -117,7 +117,7 @@ class Application:
             port_name = f"COM{settings.x.com if settings.x.com > 0 else 1}"
             port = self.config.port_map.get(port_name, port_name)
             chain = GcsChain(port, settings.x.baudrate, 5.0)
-            backends = build_xy_backends(simulate=False, chain=chain)
+            backends = build_xy_backends(simulate=False, chain=chain, devices=(settings.x.device, settings.y.device))
         options = StageOptions(port_map=dict(self.config.port_map), always_reference=False)
         return XYStage(*backends, settings, options, publish=self.events.publish)
 
