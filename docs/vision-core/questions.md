@@ -54,3 +54,10 @@ Read in the diagrams by the formula work (`alox.vision`); where the diagram and 
 | D2 | Are the stage directions (coordinate system #4) and the chuck origin still valid on every delivered tool? Which `xaxis_I32` (1 or 10) is meant? | INI values | xy-stage.md Q9, Q10 |
 | D3 | A real recipe `.zip` and the `alox.ini` / `alox_setup.ini` of a machine (without secrets): to confirm how the exposure table is stored in a recipe and the folder layout (the diagrams put `alox.ini`, `profile` and `profile_temp` directly in `[folders] settings`, not in `Documents\alox\…`) | format and layout as read in the diagrams | core/profiles.py, core/folders.py |
 | D4 | The default exposure tables start with a 0 nm row (zero order?): intended? | kept | core/exposures.py, monochromator.md Q6 |
+
+## Licence (phase 12; nothing is built until decided)
+
+| # | Question | Default meanwhile | Source |
+|---|---|---|---|
+| L1 | Keep a licence check at boot? LabVIEW refuses to boot without a WireFlow USB dongle (gen2 keys) or a "virtual dongle" file bound to the PC. The virtual dongle uses the NI Vision run-time serial and the NI License Manager computer ID, which disappear once NI is no longer installed. Options: (a) no check; (b) keep the WireFlow dongle through its vendor library; (c) a new licence file bound to the PC (drive serial / machine ID) and signed with a private key held by Aloxtec | no check (boot is not locked) | map Part 6 §2.2 |
+| L2 | Are the dongle back-office tools (dongle generator, demo dongle editor) still used? They are separate builds and are not ported unless needed | not ported | map Part 6 §0 |
