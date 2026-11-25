@@ -5,7 +5,8 @@ specification in the parent folder covers only `alox_camera_server.vi`; this fol
 
 | File | Content |
 |---|---|
-| [typedefs.md](typedefs.md) | All 352 `.ctl` typedefs decoded to text: enum items with their numeric values, cluster fields with their types, refnum kinds. |
+| [typedefs.md](typedefs.md) | All 352 `.ctl` typedefs (plus the 10 of `Pyro/framework.llb`) decoded to text: enum items with their numeric values, cluster fields with their types, refnum kinds. |
+| [call-graph.json](call-graph.json) | Direct dependencies (subVIs, typedefs) of each of the 759 VIs, including `Pyro/framework.llb`. |
 | [rest-api-routes.md](rest-api-routes.md) | The 80 routes of the `alox` REST web service (method, URL, VI, response mode), from `alox.lvws`. |
 
 ## How the typedefs were obtained

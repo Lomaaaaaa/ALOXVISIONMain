@@ -4708,3 +4708,183 @@ One section per `.ctl`. Labels and enum items are exact. Nested typedef names ar
     - code: I32
     - source: String
 
+
+# Pyro/framework.llb typedefs
+
+Decoded directly from the binary `.ctl` files (`VCTP` resource, typedef wrapper 0xF1). All ten are enums.
+
+## typedef_camera_method.ctl
+
+- Method: enum U16
+    0 = Init
+    1 = Exit
+    2 = Is Connected?
+    3 = Start
+    4 = Stop
+    5 = Grab Image
+    6 = Set Exposure
+    7 = Get Exposure
+    8 = Get Exposure Min
+    9 = Get Exposure Max
+    10 = Set Gain
+    11 = Get Gain
+    12 = Get Gain Max
+    13 = Get Gain Min
+    14 = Get Status
+
+## typedef_display_method.ctl
+
+- Display Module Method: enum U16
+    0 = Init
+    1 = Exit
+    2 = Set Refnum
+    3 = Zoom+
+    4 = Zoom-
+    5 = Zoom Fit
+    6 = Display Image
+    7 = Get Image
+    8 = Get Refnum
+
+## typedef_error_type.ctl
+
+- Error Type: enum U16
+    0 = Unknown
+    1 = General
+    2 = Arguments
+    3 = Resource
+    4 = Hardware
+    5 = Property
+
+## typedef_image_selection.ctl
+
+- Image: enum U16
+    0 = Display
+    1 = Corrected
+    2 = Measure Diam
+    3 = Tracking
+    4 = Wavelength
+    5 = Search Object
+    6 = FFT
+    7 = Tmp 1
+    8 = Tmp 2
+    9 = Template
+    10 = Detect Circle
+    11 = Tmp3
+    12 = Tmp4
+    13 = Tmp5
+    14 = Record
+    15 = Autofocus
+    16 = Recipe
+    17 = End Cycle
+    18 = Search Wafer
+    19 = Auto Expo
+    20 = Bowing
+
+## typedef_images_method.ctl
+
+- Images Module Method: enum U16
+    0 = Init
+    1 = Exit
+    2 = Get Image
+
+## typedef_language_method.ctl
+
+- Langage Module Method: enum U16
+    0 = Init
+    1 = Exit
+    2 = Set Language
+    3 = Get String
+
+## typedef_log_method.ctl
+
+- Log Module Method: enum U16
+    0 = Init
+    1 = Exit
+    2 = Set Log Window
+    3 = Set Log Status
+    4 = Set Alarm Window
+    5 = Set Alarm Status
+    6 = Clear Status
+    7 = Clear Alarm
+    8 = Log String
+    9 = Log Error
+    10 = Log Alarm
+    11 = Clear
+    12 = Save Log
+    13 = Save Alarm
+
+## typedef_user_action.ctl
+
+- User Action: enum U16
+    0 = Exit App
+    1 = Create Recipe
+    2 = Open Recipe
+    3 = Edit Recipe
+    4 = Delete Recipe
+    5 = Skip Segment
+    6 = Start Cycle
+    7 = Hold Cycle
+    8 = Stop Cycle
+    9 = Start Standby
+    10 = Stop Standby
+    11 = Start Vacuum
+    12 = Stop Vacuum
+    13 = Start Vent
+    14 = Stop Vent
+    15 = Reset Alarm
+    16 = Record Data
+    17 = Axis Settings
+    18 = Start Search Zero
+    19 = Stop Search Zero
+    20 = Move Axis X
+    21 = Move Axis Y
+    22 = Move Axis Z
+    23 = Start Autofocus
+    24 = Stop Autofocus
+    25 = Start Autofocus Fin
+    26 = Stop Autofocus Fin
+    27 = Start Search Wafer
+    28 = Stop Search Wafer
+    29 = Start Search Object
+    30 = Stop Search Object
+    31 = Zoom Settings
+    32 = Move Zoom
+    33 = Wavelength Settings
+    34 = Move Wavelength
+    35 = Start Wavelength
+    36 = Stop Wavelength
+    37 = Camera Settings
+    38 = Intensity
+    39 = Contrast
+    40 = Exposure
+    41 = Gain
+    42 = Oxyd Settings
+    43 = Start Measure Oxyd
+    44 = Stop Measure Oxyd
+    45 = Record Image
+    46 = Start Move Wafer
+    47 = Stop Move Wafer
+    48 = Start Tracking
+    49 = Stop Tracking
+    50 = Start End Cycle
+    51 = Stop End Cycle
+    52 = Start Bowing
+    53 = Stop Bowing
+
+## typedef_user_method.ctl
+
+- Method: enum U16
+    0 = Init
+    1 = Exit
+    2 = Get User
+    3 = Login
+    4 = Logout
+    5 = User Rights
+
+## typedef_user_type.ctl
+
+- User: enum U16
+    0 = Operator
+    1 = Engineer
+    2 = Maintenance
+
