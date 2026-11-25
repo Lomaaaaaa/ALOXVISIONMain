@@ -21,6 +21,19 @@ phase").
 > The camera server is therefore not completed as a server: its Z-stage driver, simulators, configuration reader, event log
 > and focus metrics are reused as modules of the new application, and the TCP server stays as reference and test tooling.
 
+## The integrated application (`alox`)
+
+The package `alox` is the new Vision Core application. Phase 3 ([`docs/vision-core/phase3-skeleton.md`](docs/vision-core/phase3-skeleton.md))
+provides the skeleton: an event bus, the device framework (one worker thread per device, timeouts, reconnection, events),
+typed reading and editing of the LabVIEW INI files, and the Z stage as the first device.
+
+```sh
+alox --simulate --check
+```
+
+`--check` opens every device, prints their status as JSON and exits; `--alox-ini PATH` reads the hardware settings of a
+real `alox.ini`; `--port-map COM2=socket://127.0.0.1:50000` connects the Z stage to the fake controller.
+
 ## Documentation
 
 The LabVIEW code has been analysed into a specification for the re-implementation. It is in [`docs/`](docs/README.md).

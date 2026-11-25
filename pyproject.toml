@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aloxcam"
-version = "0.2.0"
-description = "Python re-implementation of the ALOX Camera Server (LabVIEW)"
+name = "alox"
+version = "0.3.0"
+description = "Python rewrite of ALOX Vision Core (LabVIEW): the integrated application and the camera server reference"
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.24"]
 
@@ -14,6 +14,7 @@ stage = ["pyserial>=3.5"]         # the real PI Z stage (phase 2); pipython is n
 dev = ["pytest>=7.4", "pyserial>=3.5"]   # camera SDK extras are added in phase 3
 
 [project.scripts]
+alox = "alox.app:main"
 aloxcam = "aloxcam.app:main"
 
 [tool.setuptools.packages.find]

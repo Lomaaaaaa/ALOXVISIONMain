@@ -7,6 +7,7 @@ specification in the parent folder covers only `alox_camera_server.vi`; this fol
 |---|---|
 | [map.md](map.md) | **The map of Vision Core**: programs, processes and ports, architecture of the main application, hardware layer and servers, the 13 measurement functions, shared libraries and formulas, REST/websocket API reference, thermal measurement, licensing, dead code, defects and decisions for the migration. |
 | [migration-plan.md](migration-plan.md) | **The migration plan**: one integrated application (no separate camera/XY/WL servers), device layer first, then the core and its API headless, algorithms, functions and Qt UI, side-by-side tests and cutover; library mapping, phases and milestones, reproduce-or-fix decisions, validation, risks and the inputs needed. |
+| [phase3-skeleton.md](phase3-skeleton.md) | Phase 3: the application skeleton, the device framework, the INI layer and the Z stage device (what was built, what differs from the camera server, how to run it). |
 | [typedefs.md](typedefs.md) | All 352 `.ctl` typedefs (plus the 10 of `Pyro/framework.llb`) decoded to text: enum items with their numeric values, cluster fields with their types, refnum kinds. |
 | [call-graph.json](call-graph.json) | Direct dependencies (subVIs, typedefs) of each of the 759 VIs, including `Pyro/framework.llb`. |
 | [rest-api-routes.md](rest-api-routes.md) | The 80 routes of the `alox` REST web service (method, URL, VI, response mode), from `alox.lvws`. |
