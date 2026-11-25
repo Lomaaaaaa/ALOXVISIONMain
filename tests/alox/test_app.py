@@ -79,3 +79,34 @@ def test_port_map_parsing():
         "COM2": "socket://127.0.0.1:5000", "COM3": "/dev/ttyUSB0"}
     with pytest.raises(SystemExit):
         _port_map(["COM2"])
+
+
+# ============================================================================================== whole application
+def test_whole_application_serves_the_api_in_simulation(tmp_path: Path):
+    """Core + REST + websocket on free ports, every device simulated: the supervisor's view."""
+    httpx = pytest.importorskip("httpx")
+    pytest.importorskip("uvicorn")
+    ws_client = pytest.importorskip("websockets.sync.client")
+    exe = tmp_path / "exe"
+    exe.mkdir()
+    folders = {name: tmp_path / name for name in ("settings", "vision", "data", "profiles", "exposures", "jobs")}
+    (exe / "alox_setup.ini").write_text("[folders]\n" + "".join(
+        f'{key} = "{path.as_posix()}"\n' for key, path in (
+            ("settings", folders["settings"]), ("vision", folders["vision"]), ("data", folders["data"]),
+            ("profiles", folders["profiles"]), ("exposures", folders["exposures"]),
+            ("jobhistory", folders["jobs"]))), encoding="cp1252")
+    (exe / "alox_default.ini").write_text("[heartbeat]\nfrequency_I32 = 100\n", encoding="cp1252")
+    config = AppConfig(simulate=True, core=True, setup_ini=exe / "alox_setup.ini", host="127.0.0.1", rest_port=0,
+                       ws_port=0)
+    with Application(config) as app:
+        assert app.start() == {"z": "ready", "xy": "ready", "wl": "ready", "highmag": "ready", "lowmag": "ready"}
+        assert (folders["settings"] / "alox.ini").is_file() and (folders["profiles"] / "default.zip").is_file()
+        base = f"http://127.0.0.1:{app.rest.port}/alox/v1"
+        with ws_client.connect(f"ws://127.0.0.1:{app.websocket.port}") as ws:
+            assert httpx.get(f"{base}/system/status").json()["status"] == 100
+            assert httpx.get(f"{base}/system/profiles").json() == {"profiles": ["DEFAULT"]}
+            message = json.loads(ws.recv(timeout=5))
+            assert message["event"] in ("heartbeat", "status")
+            assert httpx.put(f"{base}/system/shutdown").status_code == 200
+            assert app.exit_requested.wait(5)
+    assert app.core is not None and app.core.system.code == 800

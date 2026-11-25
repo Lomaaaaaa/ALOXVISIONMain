@@ -1,15 +1,19 @@
 """Entry point of the integrated ALOX Vision Core application.
 
-The application container with its event bus and its devices (``docs/vision-core/phase3-skeleton.md``): the Z stage, the
-XY stages, the monochromator and the two cameras; the core, the API, the functions and the UI are added phase by phase.
+The application container (``docs/vision-core/phase3-skeleton.md``): the event bus, the devices (the Z stage, the XY
+stages, the monochromator and the two cameras), the core (:mod:`alox.core.core`) and the supervisor API (REST on 8002,
+websocket on 6123). The measurement functions and the UI are added phase by phase.
 
 Command line::
 
-    alox [--alox-ini PATH] [--simulate] [--port-map COM2=socket://127.0.0.1:50000] [--no-reference]
+    alox [--setup-ini PATH] [--settings-dir DIR] [--alox-ini PATH] [--simulate]
+         [--port-map COM2=socket://127.0.0.1:50000] [--no-reference] [--devices z,xy,wl,highmag,lowmag]
+         [--rest-port 8002] [--ws-port 6123] [--host 0.0.0.0] [--no-api]
          [--log-dir DIR] [--log-level LEVEL] [--check]
 
-``--check`` opens every device, prints their status as JSON and exits (0 when every device is ready). Without it the
-application runs until Ctrl+C.
+Without ``--check`` the whole application runs (folders from ``alox_setup.ini``, settings in ``<settings>/alox.ini``)
+until Ctrl+C or the supervisor's ``PUT /v1/system/shutdown``. ``--check`` only opens the devices, prints their status
+as JSON and exits (0 when every device is ready).
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import json
 import logging
 import sys
 import threading
+import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -26,6 +31,8 @@ from typing import Any, Self
 
 from alox import __version__
 from alox.config import TypedIni
+from alox.core.core import Core
+from alox.core.folders import resolve_folders
 from alox.devices.base import Device, DeviceError, DeviceState
 from alox.devices.camera import Camera
 from alox.devices.monochromator import (
@@ -58,7 +65,11 @@ log = logging.getLogger("alox")
 class AppConfig:
     """What the application needs to start. ``alox_ini`` None = built-in defaults. ``devices`` selects the devices to
     build (``z``, ``xy``, ``wl`` (monochromator), ``highmag``, ``lowmag``); ``genicam_producer`` is the GenTL producer (``.cti``) of the camera
-    SDK for the real cameras."""
+    SDK for the real cameras.
+
+    ``core`` runs the core and (``api``) the supervisor API: the folders come from ``setup_ini`` (default
+    ``<exe>/alox_setup.ini``), ``settings_dir`` replaces ``[folders] settings``, and ``alox_ini`` defaults to
+    ``<settings>/alox.ini``. Port 0 picks a free port (tests)."""
 
     alox_ini: Path | None = None
     simulate: bool = False
@@ -67,6 +78,13 @@ class AppConfig:
     open_timeout_s: float | None = None
     devices: tuple[str, ...] = ("z", "xy", "wl", "highmag", "lowmag")
     genicam_producer: Path | None = None
+    core: bool = False
+    setup_ini: Path | None = None
+    settings_dir: Path | None = None
+    api: bool = True
+    host: str = "0.0.0.0"
+    rest_port: int = 8002
+    ws_port: int = 6123
 
 
 class _UnavailableCameras(CameraBackend):
@@ -82,6 +100,36 @@ class _UnavailableCameras(CameraBackend):
         return None
 
 
+class _RestServer:
+    """uvicorn in a background thread (the rest of the application is synchronous)."""
+
+    def __init__(self, app: Any, host: str, port: int) -> None:
+        import uvicorn
+
+        self._server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning",
+                                                     access_log=False, lifespan="off"))
+        self._thread: threading.Thread | None = None
+        self.port = port
+
+    def start(self, timeout: float = 10.0) -> None:
+        self._thread = threading.Thread(target=self._server.run, name="rest-server", daemon=True)
+        self._thread.start()
+        end = time.monotonic() + timeout
+        while not self._server.started:
+            if not self._thread.is_alive() or time.monotonic() > end:
+                raise RuntimeError(f"REST server did not start on port {self.port}")
+            time.sleep(0.02)
+        servers = getattr(self._server, "servers", [])
+        if servers and servers[0].sockets:
+            self.port = servers[0].sockets[0].getsockname()[1]
+
+    def stop(self, timeout: float = 10.0) -> None:
+        self._server.should_exit = True
+        if self._thread is not None:
+            self._thread.join(timeout)
+            self._thread = None
+
+
 class Application:
     """The container: event bus, settings, devices. ``start`` opens the devices (a device that fails stays in
     ``fault`` and is reported; it does not stop the application); ``stop`` shuts them down."""
@@ -89,8 +137,21 @@ class Application:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.events = EventBus()
-        self.settings = self._load_settings(config.alox_ini)
-        self.typed_ini = TypedIni.load(config.alox_ini) if config.alox_ini and config.alox_ini.exists() else None
+        self.core: Core | None = None
+        self.rest: _RestServer | None = None
+        self.websocket: Any = None
+        self.exit_requested = threading.Event()
+        alox_ini = config.alox_ini
+        if config.core:
+            folders = resolve_folders(config.setup_ini, config.settings_dir)
+            self.core = Core(folders, events=self.events)
+            self.core.on_shutdown = self.exit_requested.set
+            self.core.boot()                                  # creates alox.ini from alox_default.ini when missing
+            if alox_ini is None:
+                alox_ini = folders.alox_ini
+        self.alox_ini = alox_ini
+        self.settings = self._load_settings(alox_ini)
+        self.typed_ini = TypedIni.load(alox_ini) if alox_ini and alox_ini.exists() else None
         self.devices: dict[str, Device] = {}
         self._camera_backend: CameraBackend | None = None
         wanted = set(config.devices)
@@ -107,6 +168,8 @@ class Application:
                 drives_lights = self.settings.light.connector.upper() == ("HM" if name == "highmag" else "LM")
                 self.add(Camera(self._cameras(), camera_settings, name=name,
                                 lights=self.settings.light if drives_lights else None, publish=self.events.publish))
+        if self.core is not None:
+            self.core.devices = self.devices
 
     def add(self, device: Device) -> Device:
         self.devices[device.name] = device
@@ -162,14 +225,38 @@ class Application:
         return load_alox_ini(path, CameraOptions(), warn=lambda message: log.warning("alox.ini: %s", message))
 
     def start(self) -> dict[str, str]:
-        """Start and open every device; returns ``{device: state}``."""
-        for device in self.devices.values():
-            device.start()
-            try:
-                device.open(timeout=self.config.open_timeout_s or self._open_timeout(device))
-            except DeviceError as exc:
-                log.error("%s did not open: %s", device.name, exc)
+        """Open every device (with the core: its init cycle, then the API servers); returns ``{device: state}``."""
+        if self.core is None:
+            for device in self.devices.values():
+                self._open_device(device)
+        else:
+            if self.config.api:
+                self._start_api()
+            self.core.start(self._open_device)
         return {name: str(device.state) for name, device in self.devices.items()}
+
+    def _open_device(self, device: Device) -> None:
+        device.start()
+        try:
+            device.open(timeout=self.config.open_timeout_s or self._open_timeout(device))
+        except DeviceError as exc:
+            log.error("%s did not open: %s", device.name, exc)
+
+    def _start_api(self) -> None:
+        """LabVIEW boot frames 26, 27: status 13 "Init webservice", 14 "Init websocket"."""
+        from alox.api.rest import create_app
+        from alox.api.websocket import WebsocketServer
+        from alox.core.status import SystemCode
+
+        assert self.core is not None
+        self.core.system.set(SystemCode.INIT_WEB_SERVER)
+        self.websocket = WebsocketServer(self.events, host=self.config.host, port=self.config.ws_port)
+        self.websocket.start()
+        self.rest = _RestServer(create_app(self.core, websocket_port=self.websocket.port), self.config.host,
+                                self.config.rest_port)
+        self.rest.start()
+        self.core.system.set(SystemCode.INIT_WEBSOCKET)
+        log.info("API: REST on port %d, websocket on port %d", self.rest.port, self.websocket.port)
 
     @staticmethod
     def _open_timeout(device: Device) -> float:
@@ -178,7 +265,15 @@ class Application:
         return device.default_timeout_s
 
     def stop(self) -> None:
-        """Shut every device down (idempotent), then release the camera driver."""
+        """Stop the core and the API, shut every device down (idempotent), then release the camera driver."""
+        if self.core is not None:
+            self.core.stop()
+        if self.rest is not None:
+            self.rest.stop()
+            self.rest = None
+        if self.websocket is not None:
+            self.websocket.stop()
+            self.websocket = None
         for device in self.devices.values():
             device.shutdown()
         if self._camera_backend is not None:
@@ -207,8 +302,11 @@ class Application:
 
 # ================================================================================================== command line
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="alox", description="ALOX Vision Core (integrated application, phase 3)")
-    p.add_argument("--alox-ini", type=Path, help="the LabVIEW alox.ini to read the hardware settings from")
+    p = argparse.ArgumentParser(prog="alox", description="ALOX Vision Core (integrated application)")
+    p.add_argument("--setup-ini", type=Path, help="alox_setup.ini with the [folders] (default: <exe>/alox_setup.ini)")
+    p.add_argument("--settings-dir", type=Path, help="replaces [folders] settings (alox.ini, profile, profile_temp)")
+    p.add_argument("--alox-ini", type=Path, help="the alox.ini to read the hardware settings from "
+                   "(default: <settings>/alox.ini; with --check: built-in defaults)")
     p.add_argument("--simulate", action="store_true", help="simulated devices (no hardware)")
     p.add_argument("--port-map", action="append", default=[], metavar="COMn=URL",
                    help="map a COM port of alox.ini to another device or a pyserial URL (repeatable)")
@@ -219,6 +317,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--genicam-producer", type=Path, help="GenTL producer (.cti) of the camera SDK (real cameras)")
     p.add_argument("--log-dir", type=Path, help="also write the log to daily files in this folder")
     p.add_argument("--log-level", default="INFO", help="DEBUG, INFO, WARNING, ERROR (default INFO)")
+    p.add_argument("--host", default="0.0.0.0", help="address the API listens on (default 0.0.0.0)")
+    p.add_argument("--rest-port", type=int, default=8002, help="REST API port (default 8002)")
+    p.add_argument("--ws-port", type=int, default=6123, help="websocket events port (default 6123)")
+    p.add_argument("--no-api", action="store_true", help="run without the REST and websocket servers")
     p.add_argument("--check", action="store_true", help="open the devices, print their status as JSON and exit")
     p.add_argument("--version", action="version", version=f"alox {__version__}")
     return p
@@ -256,7 +358,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     _setup_logging(args.log_level, args.log_dir)
     devices = tuple(d.strip().lower() for d in args.devices.split(",") if d.strip())
     config = AppConfig(alox_ini=args.alox_ini, simulate=args.simulate, port_map=_port_map(args.port_map),
-                       devices=devices, genicam_producer=args.genicam_producer)
+                       devices=devices, genicam_producer=args.genicam_producer, core=not args.check,
+                       setup_ini=args.setup_ini, settings_dir=args.settings_dir, api=not args.no_api,
+                       host=args.host, rest_port=args.rest_port, ws_port=args.ws_port)
     if args.no_reference:
         config = replace(config, always_reference=False)
     log.info("alox %s starting (%s)", __version__, "simulation" if config.simulate else "hardware")
@@ -268,9 +372,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if all(s == DeviceState.READY for s in states.values()) else 1
         log.info("running; press Ctrl+C to stop")
         try:
-            threading.Event().wait()
+            while not app.exit_requested.wait(0.5):
+                pass
         except KeyboardInterrupt:
-            log.info("stopping")
+            pass
+        log.info("stopping")
     return 0
 
 
