@@ -1,11 +1,5 @@
-"""The GenICam camera backend (``alox.devices.camera_genicam``) on a fake Harvesters stack.
-
-The fakes mimic what Harvesters 1.4 / genicam return: a ``Harvester`` (``add_file``, ``update`` — which destroys the
-open image acquirers —, ``device_info_list`` with ``property_dict``, ``create(index)``, ``reset``), an
-``ImageAcquirer`` (``remote_device.node_map.get_node``, ``num_buffers``, ``start``/``stop``/``is_acquiring``,
-``try_fetch(timeout=…)`` returning context-managed buffers with ``payload.components[0]``, ``destroy``) and GenApi
-nodes (``node.principal_interface_type``, ``value``, ``min``/``max``, ``symbolics``, ``get_int_value``/
-``set_int_value``, ``execute``), selectors included.
+"""The GenICam camera backend (``alox.devices.camera_genicam``) on the fake Harvesters stack
+(:mod:`alox.devices.fake_harvesters`: Harvester, image acquirer, GenApi nodes with selectors, context-managed buffers).
 """
 
 from __future__ import annotations
@@ -15,12 +9,10 @@ import sys
 import threading
 import time
 import types
-from collections import deque
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Self
+from typing import Any
 
 import numpy as np
 import pytest
@@ -38,6 +30,13 @@ from alox.devices.camera_genicam import (
     match_device,
     mono_pixels,
     serial_number_words,
+)
+from alox.devices.fake_harvesters import (
+    FakeAcquirer,
+    FakeCamera,
+    FakeGenApiError,
+    FakeGenTLError,
+    FakeHarvester,
 )
 from aloxcam.camera.attributes import (
     DEVICE_TEMPERATURE,
@@ -61,284 +60,8 @@ from aloxcam.errors import CameraError, Code
 from aloxcam.settings import CameraSettings, LightSettings
 
 DBL, I64, U32, BOOL, STRING = ValueType.DBL, ValueType.I64, ValueType.U32, ValueType.BOOL, ValueType.STRING
-INT, BOOLEAN, COMMAND, FLOAT, STR, ENUM = 2, 3, 4, 5, 6, 9          # genicam.genapi.EInterfaceType values
 WIDTH = "CameraAttributes::ImageFormatControl::Width"
 USER_ID = "CameraAttributes::DeviceControl::DeviceUserID"
-
-
-# ================================================================================================== fakes
-class FakeGenApiError(Exception):
-    """Stands in for the genicam.genapi exceptions (AccessException, OutOfRangeException, LogicalErrorException…)."""
-
-
-class FakeGenTLError(Exception):
-    """Stands in for the genicam.gentl exceptions (AccessDeniedException, IoException…)."""
-
-
-class FakeNode:
-    """A GenApi node as genicam's NodeMap returns it."""
-
-    def __init__(self, nodes: dict[str, FakeNode], name: str, itype: int, value: Any = None, *,
-                 minimum: float | None = None, maximum: float | None = None, entries: dict[str, int] | None = None,
-                 readonly: bool = False, selector: str | None = None) -> None:
-        self._nodes = nodes
-        self.name = name
-        self.node = SimpleNamespace(principal_interface_type=itype, name=name)
-        self._value = value
-        self.per: dict[int, Any] = {}                     # values per selector value
-        self._min, self._max = minimum, maximum
-        self._entries = dict(entries or {})
-        self.readonly = readonly
-        self.selector = selector
-        self.executed = 0
-        self.fail: Exception | None = None
-
-    @property
-    def itype(self) -> int:
-        return self.node.principal_interface_type
-
-    def _selected(self) -> int | None:
-        return None if self.selector is None else self._nodes[self.selector].get_int_value()
-
-    @property
-    def value(self) -> Any:
-        if self.fail is not None:
-            raise self.fail
-        if self.itype == COMMAND:
-            raise FakeGenApiError("AccessException: a command has no value")
-        sel = self._selected()
-        return self._value if sel is None else self.per.get(sel, self._value)
-
-    @value.setter
-    def value(self, v: Any) -> None:
-        if self.fail is not None:
-            raise self.fail
-        if self.readonly:
-            raise FakeGenApiError(f"AccessException: node {self.name} is not writable")
-        if self.itype == ENUM and v not in self._entries:
-            raise FakeGenApiError(f"InvalidArgumentException: {v} is not an entry of {self.name}")
-        if self.itype in (INT, FLOAT):
-            if (self._min is not None and v < self._min) or (self._max is not None and v > self._max):
-                raise FakeGenApiError(f"OutOfRangeException: {v}")
-            if self.itype == INT and not isinstance(v, int):
-                raise FakeGenApiError(f"InvalidArgumentException: {v!r} is not an integer")
-        sel = self._selected()
-        if sel is None:
-            self._value = v
-        else:
-            self.per[sel] = v
-
-    @property
-    def min(self) -> float | None:
-        if self.itype not in (INT, FLOAT):
-            raise FakeGenApiError("LogicalErrorException: no Min")
-        return self._min
-
-    @property
-    def max(self) -> float | None:
-        if self.itype not in (INT, FLOAT):
-            raise FakeGenApiError("LogicalErrorException: no Max")
-        return self._max
-
-    @property
-    def symbolics(self) -> list[str]:
-        return list(self._entries)
-
-    def get_int_value(self) -> int:
-        return self._entries[self.value]
-
-    def set_int_value(self, n: int) -> None:
-        for symbolic, value in self._entries.items():
-            if value == n:
-                self.value = symbolic
-                return
-        raise FakeGenApiError(f"OutOfRangeException: no entry with value {n}")
-
-    def execute(self) -> None:
-        if self.fail is not None:
-            raise self.fail
-        self.executed += 1
-
-
-class FakeNodeMap:
-    def __init__(self, nodes: dict[str, FakeNode]) -> None:
-        self._nodes = nodes
-
-    def get_node(self, name: str) -> FakeNode:
-        try:
-            return self._nodes[name]
-        except KeyError:
-            raise FakeGenApiError(f"LogicalErrorException: node {name} does not exist") from None
-
-
-def make_nodes() -> dict[str, FakeNode]:
-    """A GV-528x-M-like node map (SFNC names; LineSource entry values as in the LabVIEW comments)."""
-    nodes: dict[str, FakeNode] = {}
-
-    def add(name: str, itype: int, value: Any = None, **kwargs: Any) -> None:
-        nodes[name] = FakeNode(nodes, name, itype, value, **kwargs)
-    add("ExposureTime", FLOAT, 10000.0, minimum=28.0, maximum=2_000_000.0)
-    add("Gain", FLOAT, 1.0, minimum=1.0, maximum=16.0)
-    add("AcquisitionFrameRate", FLOAT, 20.0, minimum=0.5, maximum=60.0)
-    add("DeviceTemperature", FLOAT, 41.5, readonly=True)
-    add("GevSCPSPacketSize", INT, 1440, minimum=576, maximum=9000)
-    add("Width", INT, 2448, minimum=16, maximum=2448)
-    add("DeviceUserID", STR, "HighMag")
-    add("PixelFormat", ENUM, "Mono12", entries={"Mono8": 0x01080001, "Mono12": 0x01100005})
-    add("TriggerMode", ENUM, "Off", entries={"Off": 0, "On": 1})
-    add("TriggerSoftware", COMMAND)
-    add("LineSelector", ENUM, "Line0", entries={"Line0": 0, "Line1": 1, "Line2": 2, "Line3": 3})
-    add("LineMode", ENUM, "Input", entries={"Input": 0, "Output": 1}, selector="LineSelector")
-    add("LineSource", ENUM, "Off", entries={"Off": 0, "UserOutput0": 1, "UserOutput1": 2}, selector="LineSelector")
-    add("LineInverter", BOOLEAN, False, selector="LineSelector")
-    add("UserOutputSelector", ENUM, "UserOutput0", entries={"UserOutput0": 0, "UserOutput1": 1})
-    add("UserOutputValue", BOOLEAN, False, selector="UserOutputSelector")
-    return nodes
-
-
-class FakeBuffer:
-    def __init__(self, acquirer: FakeAcquirer, component: SimpleNamespace) -> None:
-        self._acquirer = acquirer
-        self.payload = SimpleNamespace(components=[component])
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._acquirer.requeue()
-
-
-class FakeAcquirer:
-    """``harvesters.core.ImageAcquirer``: frames are queued with :meth:`emit`, or produced every
-    ``free_run_period`` seconds; a frame's pixels all hold its index (mod 256)."""
-
-    def __init__(self, nodes: dict[str, FakeNode], *, free_run_period: float | None = None) -> None:
-        self.remote_device = SimpleNamespace(node_map=FakeNodeMap(nodes))
-        self.num_buffers = 1
-        self.min_num_buffers = 1
-        self.free_run_period = free_run_period
-        self._cond = threading.Condition()
-        self._pending: deque[SimpleNamespace] = deque()
-        self._acquiring = False
-        self.starts = self.stops = self.produced = self.outstanding = self.requeued = 0
-        self.stopped_with_outstanding = False
-        self.destroyed = False
-        self.fail_start: Exception | None = None
-        self.fail_stop: Exception | None = None
-        self.fetch_errors: deque[Exception] = deque()
-
-    def start(self) -> None:
-        if self.fail_start is not None:
-            raise self.fail_start
-        with self._cond:
-            self._acquiring = True
-            self.starts += 1
-
-    def stop(self) -> None:
-        if self.fail_stop is not None:
-            error, self.fail_stop = self.fail_stop, None
-            raise error
-        with self._cond:
-            if self._acquiring:
-                self.stopped_with_outstanding |= self.outstanding > 0
-                self._acquiring = False
-                self.stops += 1
-            self._pending.clear()
-
-    def is_acquiring(self) -> bool:
-        return self._acquiring
-
-    def destroy(self) -> None:
-        self.stop()
-        self.destroyed = True
-
-    def emit(self, data: np.ndarray | None = None, *, fmt: str = "Mono8", width: int = 8, height: int = 6) -> None:
-        with self._cond:
-            self._pending.append(self._component(data, fmt, width, height))
-            self._cond.notify_all()
-
-    def _component(self, data: np.ndarray | None, fmt: str, width: int, height: int) -> SimpleNamespace:
-        if data is None:
-            dtype = np.uint8 if fmt == "Mono8" else np.uint16
-            data = np.full(width * height, self.produced % 256, dtype)
-        self.produced += 1
-        return SimpleNamespace(data=data, width=width, height=height, data_format=fmt)
-
-    def try_fetch(self, *, timeout: float) -> FakeBuffer | None:
-        with self._cond:
-            if self.fetch_errors:
-                raise self.fetch_errors.popleft()
-            if self.free_run_period is not None and not self._pending:
-                self._cond.wait(min(timeout, self.free_run_period))
-                if self._acquiring:
-                    self._pending.append(self._component(None, "Mono8", 8, 6))
-            elif not self._cond.wait_for(lambda: bool(self._pending), timeout):
-                return None
-            if not self._pending:
-                return None
-            self.outstanding += 1
-            return FakeBuffer(self, self._pending.popleft())
-
-    def requeue(self) -> None:
-        with self._cond:
-            self.outstanding -= 1
-            self.requeued += 1
-
-
-@dataclass
-class FakeCamera:
-    user_defined_name: str
-    serial_number: str
-    model: str = "GV-5280CP-M"
-    free_run_period: float | None = None
-    in_use: bool = False
-    nodes: dict[str, FakeNode] = field(default_factory=make_nodes)
-    acquirer: FakeAcquirer | None = None
-
-    def property_dict(self) -> dict[str, str]:
-        return {"id_": f"GEV-{self.serial_number}", "vendor": "IDS Imaging Development Systems GmbH",
-                "model": self.model, "tl_type": "GEV", "display_name": f"IDS {self.model} {self.serial_number}",
-                "user_defined_name": self.user_defined_name, "serial_number": self.serial_number}
-
-
-class FakeHarvester:
-    """``harvesters.core.Harvester``."""
-
-    def __init__(self, cameras: list[FakeCamera]) -> None:
-        self.cameras = cameras
-        self.files: list[str] = []
-        self.device_info_list: list[SimpleNamespace] = []
-        self._listed: list[FakeCamera] = []
-        self.acquirers: list[FakeAcquirer] = []
-        self.updates = self.resets = 0
-        self.timeout_for_update = 1000
-
-    def add_file(self, path: str) -> None:
-        self.files.append(path)
-
-    def update(self) -> None:
-        self.updates += 1
-        for acquirer in self.acquirers:                   # as Harvesters: update() makes the acquirers obsolete
-            acquirer.destroy()
-        self.acquirers.clear()
-        self._listed = list(self.cameras)
-        self.device_info_list = [SimpleNamespace(property_dict=c.property_dict()) for c in self._listed]
-
-    def create(self, search_key: int) -> FakeAcquirer:
-        assert type(search_key) is int
-        camera = self._listed[search_key]
-        if camera.in_use:
-            raise FakeGenTLError("AccessDeniedException: the device is opened by another application")
-        camera.acquirer = FakeAcquirer(camera.nodes, free_run_period=camera.free_run_period)
-        self.acquirers.append(camera.acquirer)
-        return camera.acquirer
-
-    def reset(self) -> None:
-        self.resets += 1
-        for acquirer in self.acquirers:
-            acquirer.destroy()
-        self.acquirers.clear()
-        self.device_info_list = []
 
 
 def two_cameras() -> list[FakeCamera]:

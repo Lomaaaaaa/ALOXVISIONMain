@@ -270,6 +270,55 @@ port open). The port, baud rate and answer timeout come from `alox.ini` `[hardwa
 `python -m alox.devices.cm11x_sim --port 5556` serves the same emulator on a TCP port (`--port
 socket://127.0.0.1:5556` for the tool or the application).
 
+### Check the cameras
+
+`tools/camera_check.py` checks the two IDS GigE Vision cameras through the integrated application's own GenICam
+driver (`alox.devices.camera_genicam`: Harvesters on the IDS peak GenTL producer) and writes a report to send back. It
+needs Python 3.11+ and the `harvesters` package (it brings `genicam` and numpy), no install of this repository. Run it
+on the PC the cameras are connected to, **with the LabVIEW camera server and IDS peak Cockpit closed** (a camera is
+opened exclusively).
+
+1. Once: `py -3 -m pip install harvesters`, and IDS peak with the GigE Vision transport layer (the "Kernel (GEVK)"
+   producer). The tool finds the producer through `GENICAM_GENTL64_PATH`, which the IDS peak setup sets; otherwise
+   give it with `--producer`: `dir /s /b "C:\Program Files\IDS\ids_peak\*.cti"` shows where it is.
+2. **List the cameras** the producer sees, with their serial numbers:
+
+   ```bat
+   py -3 tools\camera_check.py --list
+   ```
+
+3. **Information.** Nothing the cameras keep is written (no pixel format, packet size or trigger mode); only the
+   selectors (`LineSelector`, `UserOutputSelector`, …) are stepped through their entries, then put back.
+
+   ```bat
+   py -3 tools\camera_check.py --alox-ini D:\alox\settings\alox.ini --name-map cam2=<serial of the High Mag camera>
+   ```
+
+   The cameras are the `alox.ini` `name_STR` ones. An NI MAX alias such as `cam2` is not known to the cameras: give
+   its serial number with `--name-map` (from the list of step 2), or set the camera's user-defined name to `cam2` in
+   IDS peak Cockpit. For each camera the tool reads the identity and IP address, every feature the application uses
+   (type, value, range, enumeration entries with their integer values), the I/O lines, the application's exposure /
+   gain / frame-rate / temperature attributes as the driver resolves them, and grabs 5 frames with timing
+   (`--frames`; lost frames and incomplete buffers point to jumbo frames missing on the network card). The last frame
+   of each camera is saved as PNG.
+4. **Guided actions**, when changing the exposure and switching the LED and the bulb disturbs nothing:
+
+   ```bat
+   py -3 tools\camera_check.py --alox-ini D:\alox\settings\alox.ini --name-map cam2=<serial> --actions
+   ```
+
+   Each needs a typed `yes`: a test exposure (10 ms, `--test-exposure`) written, read back and restored; the packet
+   size 8996 the application writes, with a timed grab, restored; the LED / bulb output switched on, then off, on the
+   lights camera (`alox.ini` `setLEDcam_I32`: High Mag; `--lights`) with the application's own `Cam Set Led` code.
+   Watch the LED and the bulb: the tool asks what you saw.
+5. **Send back** the `camera_report_<date>-<time>.json` file named on the last lines of the output **and the `.png`
+   files next to it** (written in `tools\`, or in `--out <folder>`); the `.txt` is the same report, easier to read.
+   It answers the camera checklist: feature names, gain units, pixel format and image size, packet size and lost
+   frames, the integer values of the I/O enumerations, which line is an output.
+
+`py -3 tools\camera_check.py --fake --actions --yes` rehearses everything on a fake Harvesters stack (two cameras),
+without hardware.
+
 ### Rehearsal with the fake controller
 
 `aloxcam.zstage.fake_c663` emulates a C-663 on a TCP port (the simulated stage behind the real serial protocol). It
