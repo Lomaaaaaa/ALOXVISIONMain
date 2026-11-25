@@ -1,7 +1,7 @@
 """Entry point of the integrated ALOX Vision Core application.
 
 The application container with its event bus and its devices (``docs/vision-core/phase3-skeleton.md``): the Z stage, the
-XY stages and the two cameras so far; the core, the API, the functions and the UI are added phase by phase.
+XY stages, the monochromator and the two cameras; the core, the API, the functions and the UI are added phase by phase.
 
 Command line::
 
@@ -28,6 +28,12 @@ from alox import __version__
 from alox.config import TypedIni
 from alox.devices.base import Device, DeviceError, DeviceState
 from alox.devices.camera import Camera
+from alox.devices.monochromator import (
+    Monochromator,
+    MonochromatorSettings,
+    build_monochromator_backend,
+    load_monochromator_settings,
+)
 from alox.devices.xy import XYSettings, XYStage, build_xy_backends, load_xy_settings
 from alox.devices.zstage import ZStage, build_stage_backend
 from alox.events import Event, EventBus
@@ -51,7 +57,7 @@ log = logging.getLogger("alox")
 @dataclass(frozen=True)
 class AppConfig:
     """What the application needs to start. ``alox_ini`` None = built-in defaults. ``devices`` selects the devices to
-    build (``z``, ``xy``, ``highmag``, ``lowmag``); ``genicam_producer`` is the GenTL producer (``.cti``) of the camera
+    build (``z``, ``xy``, ``wl`` (monochromator), ``highmag``, ``lowmag``); ``genicam_producer`` is the GenTL producer (``.cti``) of the camera
     SDK for the real cameras."""
 
     alox_ini: Path | None = None
@@ -59,7 +65,7 @@ class AppConfig:
     port_map: dict[str, str] = field(default_factory=dict)
     always_reference: bool = True
     open_timeout_s: float | None = None
-    devices: tuple[str, ...] = ("z", "xy", "highmag", "lowmag")
+    devices: tuple[str, ...] = ("z", "xy", "wl", "highmag", "lowmag")
     genicam_producer: Path | None = None
 
 
@@ -94,6 +100,8 @@ class Application:
             self.add(ZStage(backend, self.settings.z, options, publish=self.events.publish))
         if "xy" in wanted:
             self.add(self._build_xy())
+        if "wl" in wanted:
+            self.add(self._build_monochromator())
         for name, camera_settings in (("highmag", self.settings.high_mag), ("lowmag", self.settings.low_mag)):
             if name in wanted:
                 drives_lights = self.settings.light.connector.upper() == ("HM" if name == "highmag" else "LM")
@@ -120,6 +128,18 @@ class Application:
             backends = build_xy_backends(simulate=False, chain=chain, devices=(settings.x.device, settings.y.device))
         options = StageOptions(port_map=dict(self.config.port_map), always_reference=False)
         return XYStage(*backends, settings, options, publish=self.events.publish)
+
+    def _build_monochromator(self) -> Monochromator:
+        def warn(message: str) -> None:
+            log.warning("%s", message)
+
+        settings = (load_monochromator_settings(self.typed_ini, warn=warn) if self.typed_ini is not None
+                    else MonochromatorSettings())
+        mapped = self.config.port_map.get(settings.port_name.upper())
+        if mapped is not None:
+            settings = replace(settings, port=mapped)
+        backend = build_monochromator_backend(simulate=self.config.simulate)
+        return Monochromator(backend, settings, publish=self.events.publish)
 
     def _cameras(self) -> CameraBackend:
         """One driver for both cameras: simulated, or the GenICam backend on the configured GenTL producer."""
@@ -194,8 +214,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="map a COM port of alox.ini to another device or a pyserial URL (repeatable)")
     p.add_argument("--no-reference", action="store_true",
                    help="do not force a reference move at set-up when the axis is already referenced")
-    p.add_argument("--devices", default="z,xy,highmag,lowmag",
-                   help="comma-separated devices to use (default: z,xy,highmag,lowmag)")
+    p.add_argument("--devices", default="z,xy,wl,highmag,lowmag",
+                   help="comma-separated devices to use (default: z,xy,wl,highmag,lowmag)")
     p.add_argument("--genicam-producer", type=Path, help="GenTL producer (.cti) of the camera SDK (real cameras)")
     p.add_argument("--log-dir", type=Path, help="also write the log to daily files in this folder")
     p.add_argument("--log-level", default="INFO", help="DEBUG, INFO, WARNING, ERROR (default INFO)")

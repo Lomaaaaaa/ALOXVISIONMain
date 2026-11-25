@@ -27,7 +27,8 @@ def _restore_logging():
 
 def test_application_starts_every_simulated_device():
     with Application(AppConfig(simulate=True)) as app:
-        assert app.start() == {"z": "ready", "xy": "ready", "highmag": "ready", "lowmag": "ready"}
+        assert app.start() == {"z": "ready", "xy": "ready", "wl": "ready", "highmag": "ready", "lowmag": "ready"}
+        assert app.devices["wl"].goto(650) == 650
         status = app.status()["devices"]
         assert status["xy"]["referenced"] is True and status["lowmag"]["acquiring"] is True
         assert app.devices["highmag"].grab().pixels.ndim == 2

@@ -230,6 +230,46 @@ keeps the COM port open). The port, baud rate and device numbers come from `alox
 `py -3 tools\xy_stage_check.py --fake --motion --yes` rehearses everything against two emulated controllers;
 `--fake-address-mode target_sender --fake-char-mode text_equivalents` makes them speak the other variant.
 
+### Check the monochromator
+
+`tools/wl_check.py` checks the Spectral Products CM110/CM112 monochromator (RS-232, 9600 Bd 8N1, binary protocol)
+through the integrated application's own code (`alox.devices.cm11x`), so it sends exactly the bytes the new
+application will send ([docs/vision-core/monochromator.md](docs/vision-core/monochromator.md)). Same requirements as the
+Z check (Python 3.11+ and pyserial, no install); run it **with Alox Vision stopped** (`AloxWLServer.exe` keeps the COM
+port open). The port, baud rate and answer timeout come from `alox.ini` `[hardware.monochromator]` (`comport_I32`,
+`baudrate_I32`, `timeout_I32`); `--port COM1` can replace `--alox-ini`.
+
+1. **Information first.** Read-only: nothing moves, no setting changes.
+
+   ```bat
+   py -3 tools\wl_check.py --alox-ini D:\alox\settings\alox.ini
+   ```
+
+   It sends `ECHO` (the instrument must return 27), then only `QUERY` requests: serial number, type, number of
+   gratings, current grating, grooves/mm, blaze, units, position, scan speed, step size, the grooves and blaze of
+   both gratings, the zero offsets, the calibrations and NOVRAM #14. Every answer is kept byte for byte in the
+   report. `--help` lists the requests.
+2. **Moves, when a wavelength change does not disturb anything** (no measurement running on the tool). The grating
+   turns; nothing outside the monochromator moves.
+
+   ```bat
+   py -3 tools\wl_check.py --alox-ini D:\alox\settings\alox.ini --motion
+   ```
+
+   Each test needs a typed `yes`: a 10 nm move and back (`--step`), then the working range 700 nm → 950 nm
+   (`--range LO HI`), each `GOTO` timed and its position read back; `UNITS 1` (nanometres) first only if the
+   instrument is in other units (after its own `yes`). `--reset` adds a `RESET` (the grating re-homes) and measures
+   how long the instrument takes to answer again. At the end the tool offers to go back to the start wavelength. A
+   `GOTO` cannot be interrupted once sent: Ctrl+C stops the tool after the current move. The tool never sends
+   CALIBRATE, SELECT (grating change), SPEED or SCAN.
+3. **Send back** the `wl_report_<date>-<time>.json` file named on the last lines of the output (written in `tools\`,
+   or in `--out <folder>`); the `.txt` next to it is the same report, easier to read. It answers the open questions
+   of the monochromator spec: model and gratings, the bytes of each answer, the duration of a move, what RESET does.
+
+`py -3 tools\wl_check.py --fake --motion --reset --yes` rehearses everything against an emulated CM110.
+`python -m alox.devices.cm11x_sim --port 5556` serves the same emulator on a TCP port (`--port
+socket://127.0.0.1:5556` for the tool or the application).
+
 ### Rehearsal with the fake controller
 
 `aloxcam.zstage.fake_c663` emulates a C-663 on a TCP port (the simulated stage behind the real serial protocol). It
