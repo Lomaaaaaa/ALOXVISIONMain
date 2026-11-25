@@ -11,17 +11,21 @@ import pytest
 
 from alox.config import TypedIni
 from alox.devices.base import DeviceError, DeviceState
+from alox.devices.fake_chain import FakeDaisyChainServer
+from alox.devices.gcs_chain import GcsChain
 from alox.devices.xy import (
     OUTSIDE_WAFER,
     STOPPED,
     WaferSettings,
+    XYAxisSettings,
     XYSettings,
     XYStage,
+    build_xy_backends,
     load_xy_settings,
 )
 from alox.events import Event
 from aloxcam.errors import Code, StageError
-from aloxcam.settings import SimulationOptions
+from aloxcam.settings import SimulationOptions, StageOptions
 from aloxcam.zstage.sim import SimStage
 
 SIM = SimulationOptions(stage_min_mm=0.0, stage_max_mm=200.0, stage_reference_s=0.01)
@@ -254,3 +258,26 @@ def test_load_xy_settings_defaults_and_bad_baud_index():
     s = load_xy_settings(TypedIni.parse("[hardware.xy]\nbaudrate_I32 = 9\n"), warn=warnings.append)
     assert s.x.baudrate == 9600 and warnings
     assert (s.x.device, s.y.device, s.wafer.diameter_mm, s.wafer.limits_enabled) == (1, 2, 100.0, False)
+
+
+# ============================================================================================== real driver
+def test_xy_on_the_real_driver_through_the_daisy_chain(events):
+    """Two ``PiSerialStage`` sharing one emulated RS-232 daisy chain (``GcsChain`` + ``FakeDaisyChainServer``)."""
+    pytest.importorskip("serial")
+    options = SimulationOptions(stage_min_mm=0.0, stage_max_mm=200.0, stage_reference_s=0.01)
+    server = FakeDaisyChainServer(options=options, dh_running=False).start()
+    settings = XYSettings(x=XYAxisSettings(device=1, speed=100.0), y=XYAxisSettings(device=2, speed=100.0),
+                          wafer=WaferSettings(diameter_mm=100.0, origin=(100.0, 100.0)))
+    xy = XYStage(*build_xy_backends(simulate=False, chain=GcsChain(server.url, 115200, 5.0)), settings,
+                 StageOptions(always_reference=False, port_map={"COM2": server.url}), publish=events.append,
+                 supervise=False)
+    try:
+        xy.open(timeout=20)
+        assert xy.is_referenced()
+        assert xy.move_absolute(100.0, 110.0, timeout=20) == pytest.approx((100.0, 110.0), abs=1e-3)
+        with pytest.raises(DeviceError) as info:
+            xy.move_absolute(180.0, 100.0, timeout=20)
+        assert info.value.code == OUTSIDE_WAFER
+    finally:
+        xy.shutdown(timeout=5)
+        server.close()
