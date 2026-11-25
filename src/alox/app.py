@@ -141,6 +141,7 @@ class Application:
         self.rest: _RestServer | None = None
         self.websocket: Any = None
         self.exit_requested = threading.Event()
+        self.functions: dict[Any, str] = {}
         alox_ini = config.alox_ini
         if config.core:
             folders = resolve_folders(config.setup_ini, config.settings_dir)
@@ -170,6 +171,9 @@ class Application:
                                 lights=self.settings.light if drives_lights else None, publish=self.events.publish))
         if self.core is not None:
             self.core.devices = self.devices
+            from alox.functions.registry import build_services, register_functions
+
+            self.functions = register_functions(self.core.functions, build_services(self.core))
 
     def add(self, device: Device) -> Device:
         self.devices[device.name] = device
