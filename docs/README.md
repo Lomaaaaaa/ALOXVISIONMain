@@ -50,3 +50,8 @@ checked for consistency with the other chapters.
   - the exact byte format of LabVIEW variants and of NI's image serialisation (a network capture settles both);
   - the camera and controller models;
   - the real INI files.
+
+## Vision Core
+
+Source material for the migration of the whole Vision Core application (decoded typedefs, REST API routes):
+[vision-core/README.md](vision-core/README.md). The export procedure is in [labview-export-procedure.md](labview-export-procedure.md).
