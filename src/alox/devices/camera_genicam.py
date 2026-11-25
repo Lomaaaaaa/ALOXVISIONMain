@@ -671,16 +671,15 @@ class GenICamDevice(CameraDevice):
     def unconfigure(self) -> None:
         with self._lock:
             self._check("unconfigure")
-            was_acquiring, thread = self._halt_locked()
+            thread = self._halt_locked()
             self._configured = False
-        if was_acquiring:
-            self._stop_acquirer(thread, _OPERATIONS["unconfigure"])
+        self._stop_acquirer(thread, _OPERATIONS["unconfigure"])
 
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
-            _, thread = self._halt_locked()
+            thread = self._halt_locked()
             self._closed = True
             self._configured = False
         self._join(thread)
@@ -717,9 +716,8 @@ class GenICamDevice(CameraDevice):
     def stop(self) -> None:
         with self._lock:
             self._check("stop")
-            was_acquiring, thread = self._halt_locked()
-        if was_acquiring:
-            self._stop_acquirer(thread, _OPERATIONS["stop"])
+            thread = self._halt_locked()
+        self._stop_acquirer(thread, _OPERATIONS["stop"])
 
     def acquisition_in_progress(self) -> bool:
         with self._lock:
@@ -924,15 +922,15 @@ class GenICamDevice(CameraDevice):
         detail = f" (last driver error: {last})" if last else ""
         raise CameraError(Code.CAMERA_SDK, f"IMAQdx Get Image2: timeout after {timeout_ms} ms{detail}")
 
-    def _halt_locked(self) -> tuple[bool, threading.Thread | None]:
-        """Flag the acquisition stopped and wake the waiters (no join: the grab thread needs the lock to finish)."""
+    def _halt_locked(self) -> threading.Thread | None:
+        """Flag the acquisition stopped and wake the waiters; returns the grab thread to join without the lock."""
         if not self._acquiring:
-            return False, None
+            return None
         self._acquiring = False
         self._grab_stop.set()
         thread, self._grab = self._grab, None
         self._ring.interrupt()
-        return True, thread
+        return thread
 
     def _join(self, thread: threading.Thread | None) -> None:         # without the lock
         if thread is None or thread is threading.current_thread():
@@ -942,7 +940,9 @@ class GenICamDevice(CameraDevice):
             log.warning("%s: grab thread did not stop in time", self.name)
 
     def _stop_acquirer(self, thread: threading.Thread | None, operation: str) -> None:   # without the lock
-        self._join(thread)                                  # every fetched buffer is queued back before stop()
+        """Join the grab thread (every fetched buffer is queued back), then stop the acquirer; also when the session
+        was not acquiring, so that a failed stop can be retried (Harvesters' ``stop()`` does nothing when idle)."""
+        self._join(thread)
         with self._lock, _sdk(operation):
             self._acq.stop()
 
