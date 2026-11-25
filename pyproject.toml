@@ -7,7 +7,7 @@ name = "alox"
 version = "0.3.0"
 description = "Python rewrite of ALOX Vision Core (LabVIEW): the integrated application and the camera server reference"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.24"]
+dependencies = ["numpy>=1.24", "scipy>=1.10"]   # scipy: the circle fits and the oxide-rate fit (alox.vision)
 
 [project.optional-dependencies]
 stage = ["pyserial>=3.5"]         # the PI stages (Z, XY); pipython is not used
