@@ -24,6 +24,9 @@ The detailed context is in the referenced documents.
 | B5 | Log: milliseconds separator in the log lines (`,` from the Windows locale?), and should the log window keep a sliding window of the last lines (new) or be emptied when full (LabVIEW)? | `,`; sliding window | core/log.py |
 | B6 | Which user is logged in after boot (LabVIEW: Operator), and should passwords keep the Base64 storage? | Operator; Base64 behind a replaceable store | map Part 1 Q4, decision 5 |
 | B7 | Bowing: `bowing_en.lang` names the chuck steps SW/SE/NW "ZC3" (codes 207/209/211): are they ZC1/ZC4/ZC5? | ZC1/ZC4/ZC5 | core/status.py |
+| B8 | Fast autofocus: the Z estimate included the TCP delay; the latency compensation must be measured on the machine | 0 (LabVIEW's formula) | functions/focus.py, docs/06 D16 |
+| B9 | Autofocus: the stage is not moved to the best Z at the end (as the camera server); confirm | not moved | docs/06 Q22 |
+| B10 | Profile names: listed upper-case, files lower-case (`DEFAULT` ↔ `default.zip`)? | as read in the diagrams | core/profiles.py |
 
 ## Data
 
@@ -31,3 +34,5 @@ The detailed context is in the referenced documents.
 |---|---|---|---|
 | D1 | The production wavelength/exposure table per tool (the default one is marked "not suited to the OPTO cameras") | LabVIEW's default table | monochromator.md Q7 |
 | D2 | Are the stage directions (coordinate system #4) and the chuck origin still valid on every delivered tool? Which `xaxis_I32` (1 or 10) is meant? | INI values | xy-stage.md Q9, Q10 |
+| D3 | A real recipe `.zip` and the `alox.ini` / `alox_setup.ini` of a machine (without secrets): to confirm how the exposure table is stored in a recipe and the folder layout (the diagrams put `alox.ini`, `profile` and `profile_temp` directly in `[folders] settings`, not in `Documents\alox\…`) | format and layout as read in the diagrams | core/profiles.py, core/folders.py |
+| D4 | The default exposure tables start with a 0 nm row (zero order?): intended? | kept | core/exposures.py, monochromator.md Q6 |
