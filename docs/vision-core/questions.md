@@ -86,3 +86,25 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 | T4 | Keep the external 3D script (`readdata_arg.py`) or a picture made by the application; after each measurement or on EXPORT? | script on EXPORT | thermal/plot.py |
 | T5 | Thermal points by angle (LabVIEW, circles mixed) or circle by circle? | by angle | thermal/table.py |
 | T6 | Refuse the other functions and the supervisor while the thermal tool is open? | not decided; nothing refused | thermal/controller.py |
+
+### Round 2 answers (2026-11-26)
+
+| # | Owner's answer | Status |
+|---|---|---|
+| R1 | Build the Fast bowing: measure 3 points, compute the bowing from them | Done: ZW2, ZW3, ZW1 → Bowing A, then Finished (confirm "zc1 2 3" meant these wafer points) |
+| R7 | Remove the monochromator check from Search Object and all Low Mag functions | Done |
+| R8 | Blobs not used any more; Shape and Image (object learning, in Python); mesa shapes Line, Rectangle and Circular all used | To do: remove Blobs, implement Line and Rectangle in Measure Oxyd (agent stopped before writing) |
+| R9 | Refocus Oxyd never worked well; keep the mechanism | Kept |
+| R10 | `measure.vcsel.maxMesaDiam` default 40 | To do with R8 |
+| R11 | As the diagram | Kept |
+| R12 | (0, 0) plus a second measure is enough; to be rebuilt later | Kept |
+| R13 | A recipe always has a wavelength table | Kept |
+| R14 | Keep the `.ae` / `.wal` files | Kept |
+| R15 | Gain often 2, 3, 4 or more; better correlated to the camera gain | Done: camera gain = alox.ini base gain × recipe gain, digital fallback |
+| R16 | Recorded data: owner will send it | Reminder set for 2026-11-27 |
+| R18 | As LabVIEW: a continuous job never fails, it always retries | Kept |
+| R19 | Not known | Kept |
+| R22–R24 | Tilt: build a better method | To do |
+| R25 | Save tilt images at every attempt | Kept |
+| T3, T5 | The thermal tool will be built differently later | No more work on it for now |
+| T4 | Export the 3D map and also display it in the software | To do with the thermal panel |

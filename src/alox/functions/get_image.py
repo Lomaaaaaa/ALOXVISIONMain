@@ -244,6 +244,7 @@ class GetImageOptions:
     text_x: int = 50                       # "Start X" of the text overlays
     center_mark_px: int = 3                # the dot of the "type" overlay: X/2 ± 3, Y/2 ± 3 (sm d96)
     arrow_px: float = 10.0                 # arrow heads of the scale bar (alox_vision_overlay_line_with_arrows_simple)
+    gain_on_camera: bool = True            # owner R15: the recipe Gain through the camera's gain, digital fallback
 
 
 @dataclass(frozen=True)
@@ -493,6 +494,9 @@ class _Job:
     # ---------------------------------------------------------------------------------------------- Setup Hardware
     def setup_hardware(self) -> GIState:
         """"Apply camera exposure time given the current wavelength and exposure mode (fixed/auto/current) ?"."""
+        self.digital_gain = self.p.gain
+        if self.options.gain_on_camera:
+            self.digital_gain = self.camera_gain()
         if self.p.exposure_mode is not ExposureMode.FIXED:
             return GIState.ACQUIRE                               # "Auto", "Current": disabled code (sm d40, d58)
         try:
@@ -511,6 +515,28 @@ class _Job:
         except (DeviceError, AloxError, LookupError, ValueError) as exc:
             return self.fail(exc, GIState.SETUP_HARDWARE)
         return GIState.ACQUIRE
+
+    def camera_gain(self) -> float:
+        """Owner's decision R15 ("correlate it to the camera Gain"): the camera's gain becomes the base gain of
+        ``alox.ini`` ``hardware.camera.<cam>.gain`` (coerced 1..10, as the init cycle sets it) × the recipe Gain, and
+        a new frame is awaited when it changes; the part the camera cannot apply stays digital. Returns the digital gain
+        left to apply (1.0 when the camera applied everything; the recipe Gain when the camera gain cannot be set)."""
+        recipe = self.p.gain if self.p.gain > 0 else 1.0
+        base = min(10.0, max(1.0, float(self.setting(f"hardware.camera.{self.p.camera}.gain", 1.0) or 1.0)))
+        target = base * recipe
+        try:
+            camera = self.s.camera(int(self.p.camera_type))
+            current = float(camera.gain())
+            if abs(current - target) > 1e-6:
+                camera.set_gain(target)
+                applied = float(camera.gain())
+                self.pause(float(camera.exposure()) / 1e6 + self.options.frame_margin_s)   # a frame with the new gain
+            else:
+                applied = current
+        except (DeviceError, AloxError, LookupError, ValueError, TypeError, AttributeError) as exc:
+            log.warning("get image: camera gain %g not set (%s): digital gain %g", target, exc, recipe)
+            return recipe
+        return target / applied if applied > 0 and target > applied * (1 + 1e-6) else 1.0
 
     def led_device(self) -> Any:
         """The camera of ``Camera LEDcmd``, or the other one when only that one drives the lights; None when no
@@ -577,8 +603,9 @@ class _Job:
                 pixels = zoom_crop(pixels, p.zoom)
             if (p.brightness, p.contrast, p.gamma) != DEFAULT_BCG:
                 pixels = bcg_lookup(pixels, p.brightness, p.contrast, p.gamma)
-            if p.gain not in (0.0, 1.0):
-                pixels = apply_gain(pixels, p.gain)
+            gain = getattr(self, "digital_gain", p.gain)
+            if gain not in (0.0, 1.0):
+                pixels = apply_gain(pixels, gain)
             metadata = self.metadata(camera, shot)
             overlays = self.overlays(pixels, metadata, shot)
             self.s.images.put(p.camera, pixels, metadata=metadata)
