@@ -20,8 +20,13 @@ on :mod:`alox.ui.settings_panels`) in the SETTINGS tab, one at a time as ``alox_
 closes it, asking before pending edits are dropped); it follows the user's right and reloads when the active profile
 changes.
 
-Placeholders (next steps): the properties UI in the SETTINGS tab, the low- and high-level results panels (the tabs show the function states and the measurement statuses meanwhile),
-the profiles editor, the optical viewfinder and the thermal measurement.
+Results panels (:mod:`alox.ui.results_panels` on the models of :mod:`alox.ui.results`, fed by the bus events): the
+HIGH-LEVEL MEASUREMENTS tab shows the running or last high-level function (Mesa, Bowing, Tilt) and the measurement
+statuses, the LOW-LEVEL MEASUREMENTS tab the last low-level function with a panel (Autofocus, Refocus, Search
+Wavelength, Auto Exposure, Detect Circle, Measure Oxyd).
+
+Placeholders (next steps): the properties UI in the SETTINGS tab, the profiles editor, the optical viewfinder and
+the thermal measurement.
 """
 
 from __future__ import annotations
@@ -44,7 +49,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
-    QListWidget,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -75,6 +79,8 @@ from alox.ui.controller import (
     Snapshot,
     Tab,
 )
+from alox.ui.results import HIGH, LOW, ResultsBook
+from alox.ui.results_panels import ResultsPage
 from alox.ui.settings_form import SettingsPanel
 from alox.ui.widgets import ImageView, LoginDialog, LogWindow, StatusIndicator, Tool
 
@@ -87,8 +93,8 @@ NEXT_STEPS = (
     ("Function settings panels: Refocus Oxyd (no ⚙ button on the LabVIEW panel), the panels' own tools (learning, "
      "exposure tables, test runs)"),
     "Properties UI (SETTINGS button: alox_properties_ui and its tabs, with the per-tab rights)",
-    "Low-level results panels (LOW-LEVEL MEASUREMENTS tab: ui_run of each function)",
-    "High-level results panels (HIGH-LEVEL MEASUREMENTS tab: mesa / tilt / bowing results and job infos)",
+    ("Results panels still missing: Refocus Oxyd, Tracking, Search Object (LOW-LEVEL MEASUREMENTS tab), the image "
+     "overlays of the run panels"),
     "Profiles editor (EDIT PROFILES: alox_profiles_ui)",
     "Manual length measurement in µm with the calibration (display line tool), arrow-key XY jog",
     "Optical viewfinder, thermal measurement (if kept in scope), about box details, translations of the labels",
@@ -147,6 +153,7 @@ class MainWindow(QMainWindow):
         self.image_worker = Worker("ui-image", self)
         self.log_window: LogWindow | None = None
         self.settings_panel: SettingsPanel | None = None
+        self.results = ResultsBook(controller.core.functions.last_result)
 
         self._themed_icons: list[tuple[Any, str, str]] = []
         if theme_name is not None or not theme.applied():
@@ -489,20 +496,23 @@ class MainWindow(QMainWindow):
         self.settings_page.setContentsMargins(8, 6, 8, 6)
         self.settings_layout.addWidget(self.settings_page)
         self._settings_placeholder(None)
-        self.low_page = QListWidget()
-        self.low_page.setProperty("flat", True)
+        self.low_page = self.low_results = ResultsPage(LOW)
         self.high_page = QWidget()
         high_layout = QVBoxLayout(self.high_page)
-        high_layout.setContentsMargins(14, 12, 14, 12)
-        high_layout.setSpacing(6)
+        high_layout.setContentsMargins(0, 0, 0, 6)
+        high_layout.setSpacing(0)
+        self.high_results = ResultsPage(HIGH)
+        high_layout.addWidget(self.high_results, 1)
+        measures = QHBoxLayout()
+        measures.setContentsMargins(12, 0, 12, 0)
+        measures.setSpacing(18)
         self.measure_labels: dict[Measure, QLabel] = {}
         for measure in (Measure.MESA, Measure.TILT, Measure.BOWING):
-            label = QLabel()
-            high_layout.addWidget(label)
+            label = _label("", "muted")
+            measures.addWidget(label)
             self.measure_labels[measure] = label
-        note = _label("Results panels: next step (" + NEXT_STEPS[3].split(" (")[0] + ").", "muted")
-        high_layout.addWidget(note)
-        high_layout.addStretch(1)
+        measures.addStretch(1)
+        high_layout.addLayout(measures)
         self.tabs.addTab(self.settings_host, Tab.SETTINGS.label)
         self.tabs.addTab(self.low_page, Tab.LOW_LEVEL.label)
         self.tabs.addTab(self.high_page, Tab.HIGH_LEVEL.label)
@@ -535,6 +545,8 @@ class MainWindow(QMainWindow):
         for target, name, colour in self._themed_icons:
             target.setIcon(icons.icon(name, getattr(current, colour)))
         self.view.set_colours(current)
+        for page in (self.low_results, self.high_results):
+            page.retheme()
         self.theme_action.blockSignals(True)
         self.theme_action.setChecked(current is theme.DARK)
         self.theme_action.blockSignals(False)
@@ -647,8 +659,9 @@ class MainWindow(QMainWindow):
     def on_event(self, event: Any) -> None:
         """A bus event, in the UI thread."""
         parts = self.controller.handle(event)
-        if event.topic.startswith("function.") and event.topic.endswith(".state"):
-            self._add_state(event)
+        level = self.results.handle(event)
+        if level is not None:
+            self.show_results(level)
         if "functions" in parts:
             self.refresh_functions()
         if parts & {"system", "alarm", "title", "infos"}:
@@ -667,13 +680,11 @@ class MainWindow(QMainWindow):
         if "visible" in parts and self.controller.visible_request is not None:
             self.setVisible(self.controller.visible_request)
 
-    def _add_state(self, event: Any) -> None:
-        name = event.topic.split(".")[1]
-        state = event.data.get("state", "")
-        self.low_page.addItem(f"{name}: {state}")
-        while self.low_page.count() > 200:
-            self.low_page.takeItem(0)
-        self.low_page.scrollToBottom()
+    def show_results(self, level: str) -> None:
+        """The results panel of the running or last function of ``level`` (``alox_manager_hl_results_panels`` /
+        ``alox_manager_ll_results_panels``), updated from its model (:class:`alox.ui.results.ResultsBook`)."""
+        page = self.high_results if level == HIGH else self.low_results
+        page.show_model(self.results.model(level))
 
     def poll(self) -> None:
         """The producer's ``Timeout`` case, in the poll worker; the snapshot is shown in :meth:`_apply_snapshot`."""
