@@ -80,3 +80,9 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 | R24 | Tilt and edge methods used in recipes; a recorded tilt image with LabVIEW's angle (sign convention) | all ported | vision/tilt.py |
 | R25 | Save tilt images only for a valid tilt? | every attempt | functions/tilt.py |
 | R26 | Retry tilt autofocus/refocus errors as bowing does? | ends at once | functions/tilt.py |
+| T1 | Thermal map still used? Which probe on which machine (Optris CT / CTlaser / CSlaser; kSA BandiT)? | both ported | thermal/ |
+| T2 | BandiT: device at the Modbus address, 0–5 V ↔ 300–500 °C scale, non-zero `minVoltage`? | LabVIEW's values | thermal/bandit.py |
+| T3 | A CSV exported by LabVIEW after a full thermal measurement | as read in the diagrams | thermal/table.py |
+| T4 | Keep the external 3D script (`readdata_arg.py`) or a picture made by the application; after each measurement or on EXPORT? | script on EXPORT | thermal/plot.py |
+| T5 | Thermal points by angle (LabVIEW, circles mixed) or circle by circle? | by angle | thermal/table.py |
+| T6 | Refuse the other functions and the supervisor while the thermal tool is open? | not decided; nothing refused | thermal/controller.py |
