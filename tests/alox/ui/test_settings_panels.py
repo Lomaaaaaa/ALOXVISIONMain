@@ -188,7 +188,7 @@ def test_model_reports_profile_problems_and_refused_values():
     model = SettingsModel(PANELS["DET_CIRCLE"], profile)
     assert model.value("detect.vcsel.minradius") == 20.0 and model.missing("detect.vcsel.minradius")
     assert any("METHOD" in problem for problem in model.problems())
-    assert model.set("detect.vcsel.method", "blobs") is None and model.value("detect.vcsel.method") == 2
+    assert model.set("detect.vcsel.method", "obj learning") is None and model.value("detect.vcsel.method") == 1
     assert model.set("detect.vcsel.morphopen", 2.5) is not None                    # an integer field
     model.set("detect.vcsel.maxradius", 60)
     result = model.apply()

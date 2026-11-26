@@ -17,6 +17,11 @@ NI → here:
   ``Step Size`` / gap is read as the spacing in pixels between lines on the outer circle (assumption).
 - ``IMAQ Find Circular Edge 3`` → :func:`find_circular_edge`: first edge on each spoke of the annulus, then a
   least-squares circle with one outlier-rejection pass (|residual| > max(2 px, 3·MAD)). NI's own fit is unknown.
+- ``IMAQ Rake 3`` on a rotated rectangle (``tool_alox_measLine_ROI_builder``), "Get First Edge" / "Get First + Last
+  Edge" → :class:`RotatedRect`, :func:`rake_lines` (parallel lines ``Step`` pixels apart, centred) +
+  :func:`first_edges` / :func:`first_last_edges`. ``IMAQ Find Edge`` (straight edge) → :func:`find_straight_edge`
+  (first edges of a rake, total-least-squares line with one outlier-rejection pass; score = share of the lines whose
+  edge lies on the line × 1000: NI's own fit and score are not documented).
 - ``IMAQ Fit Circle 2`` (Pixel Radius = Fit Max Dist., Min Score 0–1000, Max Iterations, Reject Outliers) →
   :func:`fit_circle_robust`: with Reject Outliers a seeded RANSAC on point triples, then a least-squares refit on the
   inliers; the score is ``1000 × inliers / points`` (NI's score definition is not documented).
@@ -57,8 +62,11 @@ __all__ = [
     "EdgePolarity",
     "FitCircleResult",
     "Particle",
+    "RakeDirection",
+    "RotatedRect",
     "SearchDirection",
     "SpokeLine",
+    "StraightEdge",
     "TemplateMatch",
     "detect_circles",
     "detect_edges",
@@ -66,7 +74,9 @@ __all__ = [
     "fill_holes",
     "find_blob_circles",
     "find_circular_edge",
+    "find_straight_edge",
     "first_edges",
+    "first_last_edges",
     "fit_circle_robust",
     "fit_ellipse_radius",
     "grey_morphology",
@@ -75,6 +85,7 @@ __all__ = [
     "match_template",
     "odd_up",
     "particles",
+    "rake_lines",
     "reject_border",
     "remove_small_particles",
     "spoke_lines",
@@ -329,6 +340,119 @@ def find_circular_edge(image: np.ndarray, center: Sequence[float], r_inner: floa
             if not refit.is_nan:
                 circle = refit
     return CircularEdge(not circle.is_nan, circle, pts, lines)
+
+
+# ================================================================================================== rakes, straight edges
+class RakeDirection(IntEnum):
+    """NI ``Rake Direction`` / ``Search Direction`` of ``IMAQ Rake 3`` and ``IMAQ Find Edge``, in the frame of the
+    (rotated) rectangle. The straight-edge loop of Measure Oxyd's ``Line`` case builds it as ``2·i`` (0, 2)."""
+
+    LEFT_TO_RIGHT = 0
+    RIGHT_TO_LEFT = 1
+    TOP_TO_BOTTOM = 2
+    BOTTOM_TO_TOP = 3
+
+
+@dataclass(frozen=True)
+class RotatedRect:
+    """NI rotated rectangle (``tool_alox_measLine_ROI_builder``: Left, Top, Right, Bottom of the unrotated rectangle,
+    rotated about its centre by ``Angle``): centre, size (px) and angle in degrees, counter-clockwise as displayed."""
+
+    cx: float
+    cy: float
+    width: float
+    height: float
+    angle: float = 0.0
+
+    def to_image(self, u: float, v: float) -> tuple[float, float]:
+        """A point of the rectangle's frame (``u`` along its width, ``v`` along its height, origin at the centre;
+        ``v`` grows downwards when the angle is 0) in image pixels."""
+        a = math.radians(self.angle)
+        c, s = math.cos(a), math.sin(a)
+        return self.cx + u * c + v * s, self.cy - u * s + v * c
+
+    def corners(self) -> tuple[tuple[float, float], ...]:
+        """Top-left, top-right, bottom-right, bottom-left (of the unrotated rectangle)."""
+        w, h = self.width / 2.0, self.height / 2.0
+        return tuple(self.to_image(u, v) for u, v in ((-w, -h), (w, -h), (w, h), (-w, h)))
+
+
+def rake_lines(roi: RotatedRect, *, step: float, direction: RakeDirection) -> list[SpokeLine]:
+    """Parallel search lines of a rotated rectangle (``IMAQ Rake 3``): ``step`` pixels apart across the search
+    direction, centred in the rectangle, each crossing it from side to side in ``direction``."""
+    w, h = roi.width / 2.0, roi.height / 2.0
+    horizontal = RakeDirection(direction) in (RakeDirection.LEFT_TO_RIGHT, RakeDirection.RIGHT_TO_LEFT)
+    extent = roi.height if horizontal else roi.width
+    step = max(float(step), 1e-6)
+    n = max(1, int(extent // step) + 1)
+    lines: list[SpokeLine] = []
+    for o in (np.arange(n) - (n - 1) / 2.0) * step:
+        a, b = ((-w, float(o)), (w, float(o))) if horizontal else ((float(o), -h), (float(o), h))
+        if direction in (RakeDirection.RIGHT_TO_LEFT, RakeDirection.BOTTOM_TO_TOP):
+            a, b = b, a
+        lines.append((roi.to_image(*a), roi.to_image(*b)))
+    return lines
+
+
+def first_last_edges(image: np.ndarray, lines: Sequence[SpokeLine], options: EdgeOptions
+                     ) -> list[tuple[Edge, Edge] | None]:
+    """The first and the last edge of each search line ("Get First + Last Edge"); None where the line has fewer than
+    two edges (one edge gives no distance)."""
+    out: list[tuple[Edge, Edge] | None] = []
+    for start, end in lines:
+        found = find_edges_on_line(image, start, end, options)
+        out.append((found[0], found[-1]) if len(found) >= 2 else None)
+    return out
+
+
+@dataclass(frozen=True)
+class StraightEdge:
+    """``IMAQ Find Edge`` (straight edge) outputs: found, the edge direction ``angle`` (degrees, counter-clockwise as
+    displayed, in [−90, 90)), ``score`` 0–1000, the edge points used, the fitted segment and the search lines."""
+
+    found: bool
+    angle: float
+    score: float
+    points: np.ndarray
+    line: SpokeLine | None
+    lines: tuple[SpokeLine, ...]
+
+
+def _fold_180(angle: float) -> float:
+    """An undirected line angle in [−90, 90)."""
+    return (float(angle) + 90.0) % 180.0 - 90.0
+
+
+def _fit_line(pts: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Total least squares: centroid, unit direction and the distance of every point to the line."""
+    c = pts.mean(axis=0)
+    _, _, vt = np.linalg.svd(pts - c, full_matrices=False)
+    d = vt[0]
+    n = np.array([-d[1], d[0]])
+    return c, d, np.abs((pts - c) @ n)
+
+
+def find_straight_edge(image: np.ndarray, roi: RotatedRect, *, direction: RakeDirection, options: EdgeOptions,
+                       step: float) -> StraightEdge:
+    """First edge on each line of a rake of ``roi`` in ``direction``, then a straight line: total least squares, one
+    pass removing the points farther than ``max(2 px, 3·MAD)``, least squares again. ``score`` = ``1000 × points on
+    the line / search lines`` (NI's score definition is not documented). Not found: fewer than 2 points."""
+    lines = tuple(rake_lines(roi, step=step, direction=direction))
+    edges = [e for e in first_edges(image, lines, options) if e is not None]
+    pts = np.array([(e.x, e.y) for e in edges], dtype=np.float64).reshape(-1, 2)
+    if pts.shape[0] < 2:
+        return StraightEdge(False, math.nan, 0.0, pts, None, lines)
+    c, d, res = _fit_line(pts)
+    limit = max(2.0, 3.0 * float(np.median(np.abs(res - np.median(res)))) / 0.6745)
+    keep = res <= limit
+    if 2 <= keep.sum() < pts.shape[0]:
+        pts = pts[keep]
+        c, d, res = _fit_line(pts)
+    t = (pts - c) @ d
+    segment = ((float(c[0] + t.min() * d[0]), float(c[1] + t.min() * d[1])),
+               (float(c[0] + t.max() * d[0]), float(c[1] + t.max() * d[1])))
+    angle = _fold_180(math.degrees(math.atan2(-d[1], d[0])))
+    return StraightEdge(True, angle, 1000.0 * pts.shape[0] / len(lines), pts, segment, lines)
 
 
 # ================================================================================================== shape detection

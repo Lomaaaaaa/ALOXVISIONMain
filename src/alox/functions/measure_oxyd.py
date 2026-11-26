@@ -3,8 +3,9 @@
 Spec: ``docs/vision-core/map.md`` Part 3 §2.1, §3.10; Part 4 §3.4 (edges), §3.7 (circles and roundness), §3.8
 (``tools_alox_bound_measured_values``, ``alox_tools_convert_mesa_measures_to_micrometers``). Diagrams:
 ``alox_function_ll_measure_mesa_state_machine d`` (controls ``Image``, ``Circle In``, ``Measure Mesa Profile``),
-``d40`` (case ``"Circular", Default`` of ``Mesa Shape Type``), ``d41…d69`` (its sub-cases), ``d145`` (frame 3: end
-state), ``alox_function_ll_measure_mesa_bundle_profile_parameters d`` (profile keys and defaults),
+``d40`` (case ``"Circular", Default`` of ``Mesa Shape Type``), ``d41…d69`` (its sub-cases), ``d13`` (case ``"Line"``),
+``d70`` (case ``"Rectangle"``), ``d145`` (frame 3: end state), ``tool_alox_measLine_ROI_builder d``,
+``tool_alox_measLine_distance_computation d``, ``alox_function_ll_measure_mesa_bundle_profile_parameters d`` (profile keys and defaults),
 ``tools_alox_bound_measured_values d, d1…d4``. Formulas: :mod:`alox.vision.circles`; NI tools:
 :mod:`alox.vision.edges`.
 
@@ -18,8 +19,8 @@ store). The results are in **pixels**, as LabVIEW's; :attr:`MeasureOxydReport.di
 
 1. mesa: ``IMAQ Find Circular Edge`` on the annulus ``[Mesa Min Diam/2, Mesa Max Diam/2]`` (µm → px) centred on
    ``Circle In``, angles 0–359, mesa search direction and edge options, step = Mesa Step; not found (or an empty
-   annulus, e.g. the default ``maxMesaDiam`` 0): the external circle is ``Circle In`` (changelog 1.0.0.11) and
-   ``Mesa Found`` is FALSE;
+   annulus, e.g. ``maxMesaDiam`` 0, the LabVIEW default; the port's default is 40 µm, owner R10): the external
+   circle is ``Circle In`` (changelog 1.0.0.11) and ``Mesa Found`` is FALSE;
 2. oxide: ``IMAQ Spoke`` "Get First Edge" on ``[Oxyd Min Diam/2, Oxyd Max Diam/2]`` (Oxyd Min Diam is the constant 0
    of the bundle VI) centred on the external circle, oxide direction and edge options, step = Oxyd Step;
 3. ``IMAQ Fit Circle 2`` on the edge points (Fit Max Dist., Fit Min Score, Fit Max Iterations, Reject Outliers): the
@@ -39,6 +40,42 @@ store). The results are in **pixels**, as LabVIEW's; :attr:`MeasureOxydReport.di
    ``measure.oxyd.MeasOxydMandatory``), else ``Error``; the Fit Circle error "too few points" is not an error ("Oxyd
    missing is normal when starting process").
 
+``Measure`` (case ``Line``, ``d13``: a stripe mesa, oxidised from both sides; owner R8: in use):
+
+1. orientation: ``IMAQ Find Edge`` (straight edge) twice in a loop, search direction ``2·i`` (Left to Right, then
+   Top to Bottom), mesa edge strength and kernel; the best score gives the rake direction and the edge angle
+   (:func:`alox.vision.edges.find_straight_edge`; here in the mesa square below, not rotated);
+2. mesa: ``tool_alox_measLine_ROI_builder`` = the square ``[X − R, Y − R, X + R, Y + R]`` around ``Circle In`` with
+   ``R = Mesa Max Diam/2`` (µm → px), rotated by the edge tilt; ``IMAQ Rake 3`` "Get First + Last Edge" in the chosen
+   direction, step = Mesa Step, mesa kernel, width and strength, polarity the constant ``All Edges``;
+   ``tool_alox_measLine_distance_computation``: the first ↔ last distance on each line and their mean within
+   ``mean ± 1σ``: the mesa width; no edge: ``Mesa Found`` FALSE (9022 "No Mesa found" when mandatory);
+3. oxide: the same rake (oxide kernel, width, strength and step) in the square of side ``Oxyd Max Diam`` centred on the
+   mesa (here: the mean of the mesa segments' midpoints; ``Circle In`` without mesa): the first and last edges are the
+   two borders of the non-oxidised strip; distances and robust mean: the aperture width;
+4. diameters (pixels, the bundle of ``d13``): External = the mesa width; Fit = Inscribed = the aperture width
+   (``ZERO → NaN``); Median = ``(External − Fit)/2``, the oxidised depth per side (NaN without a mesa); Mean = the
+   mean of the aperture distances; STDDEV = their sample standard deviation; Diameters Coordinates / Lengths = the
+   first ↔ last segments of the oxide lines and their lengths; Points OXYD / MESA Used = their first and last edges;
+   Surface, Circumscribed, Circ/Insc Ratio, Accuracy: their wires were not legible in ``d13``, NaN here; then steps
+   5–7 as ``Circular`` (the bound VI, the offset, frame 3). The search direction parameters do not apply (the rake
+   direction comes from step 1).
+
+``Measure`` (case ``Rectangle``, ``d70``; owner R8: in use): the edges are found as for ``Circular`` (mesa: ``IMAQ Find
+Circular Edge`` points on the mesa annulus; oxide: ``IMAQ Spoke`` first edges from the mesa centre), then LabVIEW writes
+each point list (``"%f;%f"`` lines, ``data_mesa_detection_LV.mesadata`` / ``data_oxyd_detection_LV.mesadata`` in
+``…/02-Vision/Temp``), runs ``py mesure_edges.py`` (``System Exec``) and reads ``resultsmesa.csv`` /
+``resultsoxid.csv``, one ``key;value`` line each: label, center_x_px, center_y_px, area_px2, equivalent_diam_px,
+mean_radial_diam_px, inscribed_diam_px, circumscribed_diam_px, width_px, height_px, angle_deg, circularity_px,
+n_points, n_rejected. The script is not in the export: :func:`edge_shape` computes these values from the points
+(polygon of the points in angle order: area, centroid, equivalent diameter ``2·√(A/π)``, mean radial diameter, the
+inscribed and circumscribed diameters of :func:`alox.vision.circles.contour_diameters`, minimum-area rectangle: width
+= its longer side, height = the shorter, angle in [0, 180)), :attr:`MeasureOxydReport.mesa_shape` /
+:attr:`MeasureOxydReport.oxyd_shape`. Diameters (the bundle of ``d70``): External = the mesa ``equivalent_diam_px``
+(``x*1``); Fit = the oxide ``equivalent_diam_px``; Median = 2 × the median distance of the oxide points to the oxide
+centroid (the chord loop, inferred); Surface = the oxide ``height_px``; Mean, Inscribed, Circumscribed, Circ/Insc,
+STDDEV, Accuracy: the constant 0 in LabVIEW, NaN here (not measured); then steps 5–7 as ``Circular``.
+
 Reproduced (LabVIEW): states and transitions; params, profile keys and defaults; the steps above; the overlay switches
 (external circle, mesa search lines and edges, oxide circle, oxide edges, diameters, target circle, measure text);
 results in pixels; Gradient Values = the edge-strength profile along the first oxide search line.
@@ -51,8 +88,14 @@ Fixed:
 - When the oxide is not found the error state carries a code: 9022 "measure oxyd error (none circle found)" for a
   required mesa, 9021 "measure oxyd error (processing)" for a required oxide (LabVIEW reached ``Error`` with an
   empty error cluster); no image or no ``Circle In``: 9023 "(image/region of interest)".
-- Mesa Shape Type ``Line`` and ``Rectangle`` (radial/linear rakes, ``d13``, ``d70``) are not implemented: 9021 at
-  ``Start`` (owner question; the default is ``Circular``).
+- ``Line``: ``Oxyd Found`` was the constant TRUE (``>> Valid Fit >>``): here at least one oxide line with two edges;
+  the offset is added to Fit, Mean and Inscribed, and Median is computed with the offset Fit (LabVIEW added it to the
+  whole cluster). ``Rectangle``: the external Python script and its temporary files are replaced by
+  :func:`edge_shape` (no outlier rejection: ``n_rejected`` 0); the constant-0 fields are NaN.
+- The LabVIEW overlays of ``Line`` and ``Rectangle`` were not read: the external and oxide outlines are the two
+  borders of the stripe (``Line``) or the minimum-area rectangle (``Rectangle``) instead of circles; the target of
+  ``Line`` is two lines ``Target Diam`` apart along the stripe.
+- ``measure.vcsel.maxMesaDiam`` defaults to 40 µm (owner R10; LabVIEW 0 never found the mesa).
 - The global ``MEAS MESA RUNNING`` (which silenced error 9022 inside the HL mesa) is not used: the mandatory flags
   decide.
 """
@@ -88,8 +131,15 @@ from alox.vision.circles import (
     Circle,
     circumscribed_circle,
     contour_diameters,
+    polygon_area,
 )
-from alox.vision.edges import EdgeOptions, EdgePolarity, SearchDirection
+from alox.vision.edges import (
+    EdgeOptions,
+    EdgePolarity,
+    RakeDirection,
+    RotatedRect,
+    SearchDirection,
+)
 from alox.vision.stats import OxideMeasureType, sample_std
 
 __all__ = [
@@ -97,11 +147,14 @@ __all__ = [
     "MEASURE_OXYD_NO_MESA",
     "MEASURE_OXYD_PROCESSING",
     "DiametersReport",
+    "EdgeShape",
     "MOState",
     "MeasureOxyd",
     "MeasureOxydParams",
     "MeasureOxydReport",
     "MesaShapeType",
+    "edge_shape",
+    "robust_mean",
 ]
 
 log = logging.getLogger(__name__)
@@ -182,7 +235,7 @@ _PROFILE_KEYS: dict[str, tuple[str, Any]] = {
     "overlay_target": ("measure.oxyd.overlaytarget", True),
     "overlay_oxyd_edges": ("measure.oxyd.overlaypoints", True),
     "overlay_oxyd_measure": ("measure.oxyd.overlaymeasure", True),
-    "mesa_max_diam_um": ("measure.vcsel.maxMesaDiam", 0.0),
+    "mesa_max_diam_um": ("measure.vcsel.maxMesaDiam", 40.0),
     "overlay_mesa_search_lines": ("measure.vcsel.mesaSearchLines", True),
     "overlay_mesa_edges": ("measure.vcsel.overlaymesaedges", True),
     "mesa_shape_type": ("measure.vcsel.mesashapetype", 0),
@@ -245,7 +298,7 @@ class MeasureOxydParams:
     overlay_target: bool = True
     overlay_oxyd_edges: bool = True
     overlay_oxyd_measure: bool = True
-    mesa_max_diam_um: float = 0.0
+    mesa_max_diam_um: float = 40.0              # owner R10 (LabVIEW 0)
     oxyd_min_diam_um: float = 0.0               # the bundle VI wires the constant 0
     overlay_mesa_search_lines: bool = True
     overlay_mesa_edges: bool = True
@@ -333,6 +386,102 @@ class DiametersReport:
 Segment = tuple[float, float, float, float]
 
 
+def robust_mean(values: Any) -> float:
+    """``tool_alox_measLine_distance_computation`` ``mean``: the mean of the values inside ``mean ± 1σ`` (sample
+    standard deviation, limits included); NaN for none."""
+    v = np.asarray(values, dtype=np.float64)
+    if v.size == 0:
+        return math.nan
+    m, sd = float(v.mean()), sample_std(v)
+    kept = v[(v >= m - sd) & (v <= m + sd)]
+    return float(kept.mean()) if kept.size else m
+
+
+@dataclass(frozen=True)
+class EdgeShape:
+    """The values LabVIEW's ``Rectangle`` case reads back from ``mesure_edges.py`` for one edge-point list (pixels;
+    ``rect`` = the minimum-area rectangle, ``width`` its longer side, ``angle`` its direction in [0, 180) degrees,
+    counter-clockwise as displayed)."""
+
+    center: tuple[float, float]
+    area: float
+    equivalent_diameter: float
+    mean_radial_diameter: float
+    inscribed_diameter: float
+    circumscribed_diameter: float
+    rect: RotatedRect
+    n_points: int
+    n_rejected: int = 0
+
+    @property
+    def width(self) -> float:
+        return self.rect.width
+
+    @property
+    def height(self) -> float:
+        return self.rect.height
+
+    @property
+    def angle(self) -> float:
+        return self.rect.angle % 180.0
+
+
+def _min_area_rect(points: np.ndarray) -> RotatedRect:
+    """Rotating calipers on the convex hull: the rectangle of least area holding the points."""
+    from scipy.spatial import ConvexHull, QhullError
+
+    try:
+        hull = points[ConvexHull(points).vertices]
+    except (QhullError, ValueError):
+        hull = points
+    best: tuple[float, ...] | None = None
+    for i in range(hull.shape[0]):
+        e = hull[(i + 1) % hull.shape[0]] - hull[i]
+        length = math.hypot(float(e[0]), float(e[1]))
+        if length == 0.0:
+            continue
+        u = e / length
+        v = np.array([-u[1], u[0]])
+        pu, pv = hull @ u, hull @ v
+        area = float((pu.max() - pu.min()) * (pv.max() - pv.min()))
+        if best is None or area < best[0]:
+            best = (area, u[0], u[1], pu.min(), pu.max(), pv.min(), pv.max())
+    if best is None:
+        c = points.mean(axis=0)
+        return RotatedRect(float(c[0]), float(c[1]), 0.0, 0.0, 0.0)
+    _, ux, uy, a0, a1, b0, b1 = best
+    u, v = np.array([ux, uy]), np.array([-uy, ux])
+    c = u * (a0 + a1) / 2.0 + v * (b0 + b1) / 2.0
+    w, h = float(a1 - a0), float(b1 - b0)
+    angle = math.degrees(math.atan2(-uy, ux))
+    if w < h:
+        w, h, angle = h, w, angle + 90.0
+    angle %= 180.0
+    return RotatedRect(float(c[0]), float(c[1]), w, h, 0.0 if angle > 180.0 - 1e-9 else angle)
+
+
+def edge_shape(points: Any) -> EdgeShape | None:
+    """:class:`EdgeShape` of an edge-point list (the port of ``mesure_edges.py``, see the module docstring); None
+    for fewer than 3 points or a flat polygon."""
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if pts.shape[0] < 3:
+        return None
+    c0 = pts.mean(axis=0)
+    poly = pts[np.argsort(np.arctan2(pts[:, 1] - c0[1], pts[:, 0] - c0[0]), kind="stable")]
+    area = polygon_area(poly)
+    if not area > 0.0:
+        return None
+    x, y = poly[:, 0] - c0[0], poly[:, 1] - c0[1]
+    xn, yn = np.roll(x, -1), np.roll(y, -1)
+    cross = x * yn - xn * y
+    a2 = float(cross.sum())
+    centre = (float(c0[0] + ((x + xn) * cross).sum() / (3.0 * a2)), float(c0[1] + ((y + yn) * cross).sum() / (3.0 * a2)))
+    contour = contour_diameters(poly)
+    return EdgeShape(centre, area, 2.0 * math.sqrt(area / math.pi),
+                     2.0 * float(np.mean(np.hypot(pts[:, 0] - centre[0], pts[:, 1] - centre[1]))),
+                     contour.inscribed, contour.circumscribed, _min_area_rect(poly), int(pts.shape[0]))
+
+
 @dataclass(frozen=True)
 class MeasureOxydReport:
     """``alox_typedef_measure_mesa_function_results`` (pixels), plus the calibration and the oxide fit score."""
@@ -352,6 +501,10 @@ class MeasureOxydReport:
     gradient_values: tuple[float, ...]
     pixel_size_um: float = math.nan
     fit_score: float = 0.0
+    shape_type: MesaShapeType = MesaShapeType.CIRCULAR
+    mesa_lines: tuple[Segment, ...] = ()        # Line: the first ↔ last segment of each mesa search line
+    mesa_shape: EdgeShape | None = None         # Rectangle: the mesure_edges.py values of the mesa edges
+    oxyd_shape: EdgeShape | None = None         # Rectangle: idem, oxide edges
 
     @property
     def diameters_um(self) -> DiametersReport:
@@ -426,10 +579,6 @@ class _MeasureJob:
     def start(self) -> MOState:
         self.t0 = self.s.clock()
         p = self.p
-        if p.mesa_shape_type is not MesaShapeType.CIRCULAR:
-            return self.fail(FunctionError(MEASURE_OXYD_PROCESSING, f"measure oxyd: Mesa Shape Type "
-                                                                    f"{p.mesa_shape_type.label} is not implemented"),
-                             MOState.START)
         circle = p.circle
         if circle is None or circle.is_nan:
             return self.fail(FunctionError(MEASURE_OXYD_IMAGE, "measure oxyd error (image/region of interest): "
@@ -450,28 +599,65 @@ class _MeasureJob:
 
     # ---------------------------------------------------------------------------------------------- Measure
     def measure(self) -> MOState:
-        p, image, px = self.p, self.image, self.px
-        assert image is not None and p.circle is not None
-        circle_in = p.circle
-        # 1. mesa: IMAQ Find Circular Edge on the annulus [Mesa Min Diam/2, Mesa Max Diam/2]
-        mesa = edges.find_circular_edge(
-            image, circle_in.center, p.mesa_min_diam_um / 2.0 / px, p.mesa_max_diam_um / 2.0 / px,
-            direction=p.mesa_search_dir, step=p.mesa_step,
-            options=EdgeOptions(p.mesa_polarity, p.mesa_kernel, p.mesa_width, p.mesa_strength))
-        mesa_found = mesa.found
-        external = mesa.circle if mesa_found else circle_in
-        # 2. oxide: IMAQ Spoke, first edge on each line of [Oxyd Min Diam/2, Oxyd Max Diam/2]
+        p = self.p
+        shape = p.mesa_shape_type
+        measure = {MesaShapeType.LINE: self._line, MesaShapeType.RECTANGLE: self._rectangle}.get(shape, self._circular)
+        self.report = measure()
+        self._overlays(self.report)
+        self.ctx.set_state(str(MOState.MEASURE), mesa_found=self.report.mesa_found, oxyd_found=self.report.oxyd_found,
+                           diameters=self.report.diameters)
+        # frame 3: "MESA found And no error"
+        if not self.report.mesa_found and p.mesa_mandatory:
+            return self.fail(FunctionError(MEASURE_OXYD_NO_MESA, "measure oxyd error (none circle found): no mesa"),
+                             MOState.MEASURE)
+        if not self.report.oxyd_found and p.oxyd_mandatory:
+            what = "circle" if shape is MesaShapeType.CIRCULAR else f"({shape.label})"
+            return self.fail(FunctionError(MEASURE_OXYD_PROCESSING, f"measure oxyd error (processing): no oxide edge "
+                                                                    f"{what}"), MOState.MEASURE)
+        return MOState.FINISHED
+
+    def _options(self, mesa: bool, polarity: EdgePolarity | None = None) -> EdgeOptions:
+        p = self.p
+        if mesa:
+            return EdgeOptions(p.mesa_polarity if polarity is None else polarity, p.mesa_kernel, p.mesa_width,
+                               p.mesa_strength)
+        return EdgeOptions(p.oxyd_polarity if polarity is None else polarity, p.oxyd_kernel, p.oxyd_width,
+                           p.oxyd_strength)
+
+    def _gradient(self, lines: Any) -> tuple[float, ...]:
+        """Gradient Values: the edge-strength profile along the first oxide search line."""
+        if not lines:
+            return ()
+        (a, b) = lines[0]
+        assert self.image is not None
+        return tuple(float(v) for v in edges.edge_strengths(edges.line_profile(self.image, a, b, self.p.oxyd_width),
+                                                            self.p.oxyd_kernel))
+
+    def _oxide_spokes(self, centre: tuple[float, float]) -> tuple[list[edges.SpokeLine], np.ndarray]:
+        """Step 2: ``IMAQ Spoke`` first edges on ``[Oxyd Min Diam/2, Oxyd Max Diam/2]`` around ``centre``."""
+        p, px = self.p, self.px
+        assert self.image is not None
         r_in, r_out = p.oxyd_min_diam_um / 2.0 / px, p.oxyd_max_diam_um / 2.0 / px
-        oxyd_options = EdgeOptions(p.oxyd_polarity, p.oxyd_kernel, p.oxyd_width, p.oxyd_strength)
-        lines = edges.spoke_lines(external.center, r_in, r_out, step=p.oxyd_step, direction=p.oxyd_search_dir) \
+        lines = edges.spoke_lines(centre, r_in, r_out, step=p.oxyd_step, direction=p.oxyd_search_dir) \
             if r_out > r_in else []
-        found = edges.first_edges(image, lines, oxyd_options)
-        points = np.array([(e.x, e.y) for e in found if e is not None], dtype=np.float64).reshape(-1, 2)
-        gradient: tuple[float, ...] = ()
-        if lines:
-            (a, b) = lines[0]
-            gradient = tuple(float(v) for v in edges.edge_strengths(
-                edges.line_profile(image, a, b, p.oxyd_width), p.oxyd_kernel))
+        found = edges.first_edges(self.image, lines, self._options(False))
+        return lines, np.array([(e.x, e.y) for e in found if e is not None], dtype=np.float64).reshape(-1, 2)
+
+    def _mesa_circular_edge(self) -> edges.CircularEdge:
+        """Step 1: ``IMAQ Find Circular Edge`` on the annulus ``[Mesa Min Diam/2, Mesa Max Diam/2]``."""
+        p, px = self.p, self.px
+        assert self.image is not None and p.circle is not None
+        return edges.find_circular_edge(
+            self.image, p.circle.center, p.mesa_min_diam_um / 2.0 / px, p.mesa_max_diam_um / 2.0 / px,
+            direction=p.mesa_search_dir, step=p.mesa_step, options=self._options(True))
+
+    def _circular(self) -> MeasureOxydReport:
+        p, px = self.p, self.px
+        assert p.circle is not None
+        mesa = self._mesa_circular_edge()
+        mesa_found = mesa.found
+        external = mesa.circle if mesa_found else p.circle
+        lines, points = self._oxide_spokes(external.center)
         # 3. IMAQ Fit Circle 2
         fit = edges.fit_circle_robust(points, max_distance=p.fit_max_dist, min_score=p.fit_min_score,
                                       max_iterations=p.fit_max_iterations, reject_outliers=p.reject_outliers)
@@ -479,25 +665,130 @@ class _MeasureJob:
         used = points[fit.inliers] if (p.reject_outliers and oxyd_found) else points
         diameters, chords, lengths = self._diameters(external, fit.circle if oxyd_found else NAN_CIRCLE, used,
                                                      oxyd_found)
-        self.report = MeasureOxydReport(
+        return MeasureOxydReport(
             external_circle=external, oxyd_circle=fit.circle if oxyd_found else NAN_CIRCLE, diameters=diameters,
             diameter_lines=chords, diameter_lengths=lengths,
             oxyd_points=tuple((float(x), float(y)) for x, y in used),
             mesa_found=mesa_found, oxyd_found=oxyd_found, process_time_ms=(self.s.clock() - self.t0) * 1000.0,
             oxyd_search_lines=_segments(lines), mesa_search_lines=_segments(mesa.lines),
-            mesa_points=tuple((float(x), float(y)) for x, y in mesa.points), gradient_values=gradient,
+            mesa_points=tuple((float(x), float(y)) for x, y in mesa.points), gradient_values=self._gradient(lines),
             pixel_size_um=px, fit_score=fit.score)
-        self._overlays(self.report)
-        self.ctx.set_state(str(MOState.MEASURE), mesa_found=mesa_found, oxyd_found=oxyd_found,
-                           diameters=self.report.diameters)
-        # frame 3: "MESA found And no error"
-        if not mesa_found and p.mesa_mandatory:
-            return self.fail(FunctionError(MEASURE_OXYD_NO_MESA, "measure oxyd error (none circle found): no mesa"),
-                             MOState.MEASURE)
-        if not oxyd_found and p.oxyd_mandatory:
-            return self.fail(FunctionError(MEASURE_OXYD_PROCESSING, "measure oxyd error (processing): no oxide edge "
-                                                                    "circle"), MOState.MEASURE)
-        return MOState.FINISHED
+
+    def _bounded(self, external: float, values: dict[str, float], offset_keys: tuple[str, ...]) -> tuple[
+            float, dict[str, float]]:
+        """Steps 5–6 (``tools_alox_bound_measured_values``, the offset) for ``Line`` and ``Rectangle``."""
+        p, px = self.p, self.px
+        if not (p.mesa_min_diam_um <= external * px <= p.mesa_max_diam_um):
+            external = math.nan
+        if not (0.0 <= values["fit"] <= p.oxyd_max_diam_um / px):
+            values = dict.fromkeys(values, math.nan)
+        offset = p.oxid_result_offset_um / px
+        return external, {k: v + offset if k in offset_keys else v for k, v in values.items()}
+
+    # ---------------------------------------------------------------------------------------------- Line
+    def _rake(self, roi: RotatedRect, direction: RakeDirection, mesa: bool
+              ) -> tuple[list[edges.SpokeLine], list[tuple[edges.Edge, edges.Edge]]]:
+        """``IMAQ Rake 3`` "Get First + Last Edge", polarity ``All Edges`` (the constant of ``d13``)."""
+        assert self.image is not None
+        step = self.p.mesa_step if mesa else self.p.oxyd_step
+        lines = edges.rake_lines(roi, step=step, direction=direction)
+        pairs = edges.first_last_edges(self.image, lines, self._options(mesa, EdgePolarity.ALL))
+        return lines, [pair for pair in pairs if pair is not None]
+
+    def _line(self) -> MeasureOxydReport:
+        p, px, image = self.p, self.px, self.image
+        assert p.circle is not None and image is not None
+        cx, cy = p.circle.center
+        # 1. orientation: IMAQ Find Edge, search direction 2·i (Left to Right, Top to Bottom), the best score
+        direction, tilt = RakeDirection.LEFT_TO_RIGHT, 0.0
+        half = p.mesa_max_diam_um / 2.0 / px
+        mesa_lines: list[edges.SpokeLine] = []
+        mesa_pairs: list[tuple[edges.Edge, edges.Edge]] = []
+        if half > 0.0:
+            square = RotatedRect(cx, cy, 2.0 * half, 2.0 * half)
+            best: edges.StraightEdge | None = None
+            for candidate in (RakeDirection.LEFT_TO_RIGHT, RakeDirection.TOP_TO_BOTTOM):
+                found = edges.find_straight_edge(image, square, direction=candidate,
+                                                 options=self._options(True, EdgePolarity.ALL), step=p.mesa_step)
+                if found.found and (best is None or found.score > best.score):
+                    best, direction = found, candidate
+            if best is not None:      # the tilt of the edge against the axis across the search direction
+                across = 90.0 if direction is RakeDirection.LEFT_TO_RIGHT else 0.0
+                tilt = (best.angle - across + 90.0) % 180.0 - 90.0
+            # 2. mesa: rotated square around Circle In, first + last edges, robust mean of the distances
+            mesa_lines, mesa_pairs = self._rake(RotatedRect(cx, cy, 2.0 * half, 2.0 * half, tilt), direction, True)
+        mesa_d = [math.hypot(b.x - a.x, b.y - a.y) for a, b in mesa_pairs]
+        mesa_found = bool(mesa_d)
+        mesa_width = robust_mean(mesa_d)
+        if mesa_found:
+            centre = (float(np.mean([(a.x + b.x) / 2.0 for a, b in mesa_pairs])),
+                      float(np.mean([(a.y + b.y) / 2.0 for a, b in mesa_pairs])))
+        else:
+            centre = (cx, cy)
+        # 3. oxide: the same rake in the square of side Oxyd Max Diam around the mesa centre
+        half_o = p.oxyd_max_diam_um / 2.0 / px
+        ox_lines, ox_pairs = self._rake(RotatedRect(*centre, 2.0 * half_o, 2.0 * half_o, tilt), direction, False) \
+            if half_o > 0.0 else ([], [])
+        ox_d = [math.hypot(b.x - a.x, b.y - a.y) for a, b in ox_pairs]
+        oxyd_found = bool(ox_d)
+        # 4. diameters
+        width = robust_mean(ox_d)
+        fit = width if width else math.nan                                          # ZERO -> NaN
+        external = mesa_width if mesa_found else 2.0 * p.circle.radius
+        values = {"fit": fit, "mean": float(np.mean(ox_d)) if ox_d else math.nan, "inscribed": fit,
+                  "median": math.nan, "surface": math.nan, "circumscribed": math.nan}
+        bounded_ext, values = self._bounded(external, values, ("fit", "mean", "inscribed"))
+        if mesa_found and not math.isnan(values["fit"]):
+            values["median"] = (external - values["fit"]) / 2.0                      # oxidised depth per side
+        diameters = DiametersReport(external=bounded_ext, stddev=sample_std(ox_d) if ox_d else math.nan, **values)
+        ox_centre = (float(np.mean([(a.x + b.x) / 2.0 for a, b in ox_pairs])),
+                     float(np.mean([(a.y + b.y) / 2.0 for a, b in ox_pairs]))) if oxyd_found else centre
+        segments = tuple((a.x, a.y, b.x, b.y) for a, b in ox_pairs)
+        return MeasureOxydReport(
+            external_circle=Circle(centre[0], centre[1], mesa_width / 2.0) if mesa_found else p.circle,
+            oxyd_circle=Circle(ox_centre[0], ox_centre[1], width / 2.0) if oxyd_found else NAN_CIRCLE,
+            diameters=diameters, diameter_lines=segments, diameter_lengths=tuple(float(d) for d in ox_d),
+            oxyd_points=tuple(pt for a, b in ox_pairs for pt in ((a.x, a.y), (b.x, b.y))),
+            mesa_found=mesa_found, oxyd_found=oxyd_found, process_time_ms=(self.s.clock() - self.t0) * 1000.0,
+            oxyd_search_lines=_segments(ox_lines), mesa_search_lines=_segments(mesa_lines),
+            mesa_points=tuple(pt for a, b in mesa_pairs for pt in ((a.x, a.y), (b.x, b.y))),
+            gradient_values=self._gradient(ox_lines), pixel_size_um=px,
+            fit_score=1000.0 * len(ox_pairs) / len(ox_lines) if ox_lines else 0.0, shape_type=MesaShapeType.LINE,
+            mesa_lines=tuple((a.x, a.y, b.x, b.y) for a, b in mesa_pairs))
+
+    # ---------------------------------------------------------------------------------------------- Rectangle
+    def _rectangle(self) -> MeasureOxydReport:
+        p, px = self.p, self.px
+        assert p.circle is not None
+        mesa = self._mesa_circular_edge()
+        mesa_shape = edge_shape(mesa.points)
+        mesa_found = mesa_shape is not None
+        centre = mesa_shape.center if mesa_shape is not None else p.circle.center
+        lines, points = self._oxide_spokes(centre)
+        oxyd_shape = edge_shape(points)
+        oxyd_found = oxyd_shape is not None
+        external = mesa_shape.equivalent_diameter if mesa_shape is not None else 2.0 * p.circle.radius
+        chords: tuple[Segment, ...] = ()
+        lengths: tuple[float, ...] = ()
+        values = dict.fromkeys(("fit", "median", "mean", "surface", "inscribed", "circumscribed"), math.nan)
+        if oxyd_shape is not None:
+            ox, oy = oxyd_shape.center
+            radii = np.hypot(points[:, 0] - ox, points[:, 1] - oy)
+            chords = tuple((2 * ox - x, 2 * oy - y, x, y) for x, y in points)
+            lengths = tuple(float(2.0 * r) for r in radii)
+            values.update(fit=oxyd_shape.equivalent_diameter, median=2.0 * float(np.median(radii)),
+                          surface=oxyd_shape.height)
+        bounded_ext, values = self._bounded(external, values, ("fit", "median", "surface"))
+        return MeasureOxydReport(
+            external_circle=Circle(centre[0], centre[1], external / 2.0) if mesa_found else p.circle,
+            oxyd_circle=Circle(*oxyd_shape.center, oxyd_shape.equivalent_diameter / 2.0) if oxyd_shape else NAN_CIRCLE,
+            diameters=DiametersReport(external=bounded_ext, **values), diameter_lines=chords, diameter_lengths=lengths,
+            oxyd_points=tuple((float(x), float(y)) for x, y in points),
+            mesa_found=mesa_found, oxyd_found=oxyd_found, process_time_ms=(self.s.clock() - self.t0) * 1000.0,
+            oxyd_search_lines=_segments(lines), mesa_search_lines=_segments(mesa.lines),
+            mesa_points=tuple((float(x), float(y)) for x, y in mesa.points), gradient_values=self._gradient(lines),
+            pixel_size_um=px, fit_score=1000.0 * points.shape[0] / len(lines) if lines else 0.0,
+            shape_type=MesaShapeType.RECTANGLE, mesa_shape=mesa_shape, oxyd_shape=oxyd_shape)
 
     def _diameters(self, external: Circle, oxyd: Circle, used: np.ndarray, found: bool
                    ) -> tuple[DiametersReport, tuple[Segment, ...], tuple[float, ...]]:
@@ -530,17 +821,15 @@ class _MeasureJob:
         """The overlay groups of the result (colours chosen here; the LabVIEW colours were not read)."""
         p, images = self.p, self.s.images
         mesa: list[Shape] = []
-        if p.overlay_external and not r.external_circle.is_nan:
-            c = r.external_circle
-            mesa.append(CircleShape(c.x, c.y, c.radius, GREEN, 2))
+        if p.overlay_external:
+            mesa += self._outline(r, r.mesa_lines, r.mesa_shape, r.external_circle, r.mesa_found, GREEN)
         if p.overlay_mesa_search_lines:
             mesa += [LineShape(*seg, BLUE, 1) for seg in r.mesa_search_lines]
         if p.overlay_mesa_edges and r.mesa_points:
             mesa.append(Points(r.mesa_points, GREEN, 1, marker=3))
         oxyd: list[Shape] = []
-        if p.overlay_oxyd and not r.oxyd_circle.is_nan:
-            c = r.oxyd_circle
-            oxyd.append(CircleShape(c.x, c.y, c.radius, RED, 2))
+        if p.overlay_oxyd:
+            oxyd += self._outline(r, r.diameter_lines, r.oxyd_shape, r.oxyd_circle, r.oxyd_found, RED)
         if p.overlay_oxyd_measure:
             value = r.diameters.selected(p.oxyd_measure_type) * r.pixel_size_um
             text = "Oxyd Diam.: -" if math.isnan(value) else f"Oxyd Diam.: {value:.2f} µm"
@@ -551,13 +840,40 @@ class _MeasureJob:
             if p.overlay_oxyd_diameters else []
         target: list[Shape] = []
         centre = r.oxyd_circle if not r.oxyd_circle.is_nan else r.external_circle
-        if p.overlay_target and not centre.is_nan:
-            target.append(CircleShape(centre.x, centre.y, p.target_diam_um / 2.0 / r.pixel_size_um, MAGENTA, 1))
+        half = p.target_diam_um / 2.0 / r.pixel_size_um
+        if p.overlay_target and not centre.is_nan and r.shape_type is MesaShapeType.LINE and r.diameter_lines:
+            x1, y1, x2, y2 = r.diameter_lines[0]                   # two lines along the stripe, Target Diam apart
+            n = math.hypot(x2 - x1, y2 - y1) or 1.0
+            ux, uy = (x2 - x1) / n, (y2 - y1) / n
+            length = p.oxyd_max_diam_um / 2.0 / r.pixel_size_um
+            for side in (-half, half):
+                ox, oy = centre.x + side * ux, centre.y + side * uy
+                target.append(LineShape(ox + length * uy, oy - length * ux, ox - length * uy, oy + length * ux,
+                                        MAGENTA, 1))
+        elif p.overlay_target and not centre.is_nan:
+            target.append(CircleShape(centre.x, centre.y, half, MAGENTA, 1))
         images.set_overlay("mesa", mesa)
         images.set_overlay("oxyd", oxyd)
         images.set_overlay("edges", edges_shapes)
         images.set_overlay("diameters", diameters)
         images.set_overlay("target", target)
+
+    @staticmethod
+    def _outline(r: MeasureOxydReport, segments: tuple[Segment, ...], shape: EdgeShape | None, circle: Circle,
+                 found: bool, colour: tuple[int, int, int]) -> list[Shape]:
+        """The external / oxide outline: the circle (``Circular``; the external circle is ``Circle In`` without a
+        mesa), the two borders of the stripe through the first and the last edges (``Line``) or the minimum-area
+        rectangle (``Rectangle``)."""
+        if r.shape_type is MesaShapeType.LINE:
+            if not (found and segments):
+                return []
+            first, last = segments[0], segments[-1]
+            return [LineShape(first[0], first[1], last[0], last[1], colour, 2),
+                    LineShape(first[2], first[3], last[2], last[3], colour, 2)]
+        if r.shape_type is MesaShapeType.RECTANGLE and shape is not None:
+            corners = shape.rect.corners()
+            return [LineShape(*corners[i], *corners[(i + 1) % 4], colour, 2) for i in range(4)]
+        return [] if circle.is_nan else [CircleShape(circle.x, circle.y, circle.radius, colour, 2)]
 
     def finished(self) -> None:
         return None

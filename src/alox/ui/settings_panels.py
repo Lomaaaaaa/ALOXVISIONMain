@@ -358,7 +358,7 @@ DETECT_CIRCLE = PanelSpec(
     UserAction.DETECT_CIRCLE_SETUP,
     pages=(
         Page("SETTINGS", (
-            Group("GENERAL", (ring("METHOD", _DC + "method", 0, "SHAPE DETECTION", "OBJ LEARNING", "BLOBS"),)),
+            Group("GENERAL", (ring("METHOD", _DC + "method", 0, "SHAPE DETECTION", "OBJ LEARNING"),)),
             Group("CIRCLE SETTINGS", (
                 ring("BEST CIRCLE METHOD", _DC + "bestcirclemethod", 0, "CENTERED", "SCORE", "LARGEST"),
                 num("RADIUS MIN", _DC + "minradius", 20.0, 0.0, 10_000.0, unit="µm"),
@@ -385,19 +385,6 @@ DETECT_CIRCLE = PanelSpec(
             path("MASK PATH", _DC + "maskpath"),
             num("MIN SCORE", _DC + "scoreresult", 75.0, 0.0, 100.0, unit="%"),
             num("MAX OCCLUSION", _DC + "occlusionresult", 30.0, 0.0, 100.0, unit="%"))),)),
-        Page("BINARY OBJ.", (
-            Group("THRESHOLD", (
-                ring("METHOD", _DC + "binarymethod", 0, "NIBLACK", "BACKGROUND CORRECTION"),
-                ring("OBJECT TYPE", _DC + "objecttype", 0, "BRIGHT OBJECTS", "DARK OBJECTS"),
-                num("WINDOW SIZE", _DC + "detectkernel", 0, 0, 999, unit="px"),
-                check("INVERT", _DC + "binaryinvert", True))),
-            Group("FILTERS", (
-                check("REMOVE SMALL OBJECTS", _DC + "removesmalls", True),
-                num("ITERATIONS", _DC + "removesmallscount", 0, 0, 100),
-                check("REMOVE BORDER OBJECTS", _DC + "removeborder", True),
-                check("FILL HOLES", _DC + "fillhole", True),
-                num("CIRCULARITY MIN", _DC + "mincircfactor", 0.75, 0.0, 10.0, step=0.05),
-                num("CIRCULARITY MAX", _DC + "maxcircfactor", 1.25, 0.0, 10.0, step=0.05))))),
         Page("DISPLAY", (Group("OVERLAYS", (
             check("OVERLAY BEST CIRCLE", _DC + "overlaybestcircle", False),
             check("OVERLAY ALL CIRCLES", _DC + "overlayallcircles", False),
@@ -405,6 +392,9 @@ DETECT_CIRCLE = PanelSpec(
     ),
     readers=(_from_profile("detect_circle", "DetectCircleParams"),),
     omitted=("DISPLAY IMAGE (Source / Pre-Processed / Binarized / Filtered): panel preview only, no profile key",
+             ("METHOD BLOBS and the BINARY OBJ. page (detect.vcsel.binarymethod, objecttype, detectkernel, "
+              "binaryinvert, removesmalls, removesmallscount, removeborder, fillhole, mincircfactor, maxcircfactor): "
+              "Blobs is not used anymore (owner R8), a recipe with method 2 runs Shape"),
              "TEMPLATE / LEARN MASK / TEMP IMAGE: the learning tools of the panel, not ported",
              ("detect.vcsel.dp, mindist, param1, param2 (Hough 'MRQT' values): read by the port, edited only by "
               "the old copy alox_function_ll_detect_circle_ui_config_py.vi (unused in V1.2.6.2)")))
@@ -432,7 +422,7 @@ MEASURE_OXYD = PanelSpec(
             _edge_group("MEASURE MESA", _MV, 0),
             Group("MESA DIAMETER", (
                 num("MIN MESA Diam.", _MV + "minMesaDiam", 5.0, 0.0, 10_000.0, unit="µm"),
-                num("MAX MESA Diam.", _MV + "maxMesaDiam", 0.0, 0.0, 10_000.0, unit="µm"))))),
+                num("MAX MESA Diam.", _MV + "maxMesaDiam", 40.0, 0.0, 10_000.0, unit="µm"))))),
         Page("SETTINGS OXID", (
             _edge_group("MEASURE OXYD", _MO, 1),
             Group("OXID DIAMETER", (
@@ -464,6 +454,7 @@ MEASURE_OXYD = PanelSpec(
         ring("Mesa type", _MV + "mesashapetype", 0, "CIRCULAR", "LINE", "RECTANGLE"))),),
     readers=(_from_profile("measure_oxyd", "MeasureOxydParams"),),
     omitted=("SEARCH ANGLE, OXYD MIN DIAM (um): no profile key read by the port",
+             "Mesa type LINE: the SEARCH DIRECTION rings do not apply (the rake direction comes from the edge found)",
              "EDGE STRENGTH graph, Edge Information, FOUND OXID: indicators of the panel's test measure"))
 
 TRACKING = PanelSpec(
@@ -627,7 +618,8 @@ TILT = PanelSpec(
     pages=(
         Page("GENERAL", (
             Group("TILT MEASUREMENT", (
-                ring("TILT MEASURE METHOD", _MT + "method", 0, "STRAIGHT EDGE", "DUAL OBJECTS"),
+                ring("TILT MEASURE METHOD", _MT + "method", 0, "STRAIGHT EDGE", "DUAL OBJECTS", "LONG BASELINE EDGE",
+                     "LATTICE"),
                 num("MAX STEPS", _MT + "maxmoves", 0, 0, 1_000),
                 num("STEP", _MT + "step", 0.1, 0.0, 100.0, unit="mm", step=0.01, decimals=3),
                 check("AUTOFOCUS", _MT + "autofocus", True),
@@ -665,6 +657,14 @@ TILT = PanelSpec(
                 num("OBJ MIN LENGTH", _MT + "minlength", 5, 0, 10_000),
                 num("OBJ OPEN", _MT + "morphopen", 0, 0, 99),
                 num("OBJ CLOSE", _MT + "morphclose", 0, 0, 99))))),
+        Page("LONG BASELINE", (Group("LONG BASELINE EDGE / LATTICE", (
+            num("BASELINE LENGTH", _MT + "lblength", 20.0, 0.1, 300.0, unit="mm", step=1.0, decimals=2),
+            num("FIRST STEP (0 = AUTO)", _MT + "lbfirststep", 0.0, 0.0, 150.0, unit="mm", step=0.1, decimals=3),
+            num("STEP GROWTH", _MT + "lbgrowth", 8.0, 1.1, 100.0, step=0.5, decimals=1),
+            num("CONSISTENCY", _MT + "lbtolerancedeg", 0.5, 0.01, 45.0, unit="±°", step=0.1, decimals=2),
+            num("MESA PITCH (0 = MEASURED)", _MT + "latticepitchum", 0.0, 0.0, 10_000.0, unit="µm", step=1.0,
+                decimals=2),
+            check("REFOCUS AT EACH POSITION", _MT + "lbrefocus", False))),)),
         Page("DISPLAY", (Group("DISPLAY", (
             check("SHOW WINDOW", _MT + "showwindow", True),
             check("OVERLAY MATCHES", _MT + "overlaymatches", True),

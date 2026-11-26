@@ -141,16 +141,21 @@ def test_morphology_and_output_image(rig):
     assert shown.shape == image.shape and not np.array_equal(shown, image)
 
 
-def test_blobs_method(rig):
-    image = disc_image([MESA], noise=1.0)
-    report = rig.run(image=image, algo_method=AlgoMethod.BLOBS, window_size=301, blob_method=1, binary_invert=False,
-                     small_iterations=2, output_image_type=OutputImageType.BINARIZED)
-    c = report.best_circle
-    assert (c.x, c.y, c.radius) == pytest.approx(MESA[:3], abs=1.5)
-    shown = rig.services.images.images["highmag"]
-    assert set(np.unique(shown)) == {0, 255}
-    with pytest.raises(FunctionError):                                    # inverted: the background touches the border
-        rig.run(image=image, algo_method="Blobs", window_size=301, blob_method=1, binary_invert=True)
+def test_blobs_is_not_used_anymore_and_runs_shape(rig, caplog):
+    """Owner R8: an old recipe with ``detect.vcsel.method`` 2 (Blobs) runs Shape, with a warning."""
+    image = disc_image([MESA])
+    params = DetectCircleParams.from_profile(Store({"detect.vcsel.method": 2}), image=image, ellipses=False,
+                                             output_image_type=OutputImageType.BINARIZED)
+    assert params.algo_method is AlgoMethod.BLOBS
+    with caplog.at_level("WARNING", logger="alox.functions.detect_circle"):
+        report = rig.function.run(params, rig.ctx())
+    shape = rig.run(image=image, ellipses=False)
+    assert report.best_circle == shape.best_circle and report.found
+    assert any("Blobs is not used anymore" in r.getMessage() for r in caplog.records)
+    shown = rig.services.images.images["highmag"]                       # Blobs' binarized image: the pre-processed one
+    assert set(np.unique(shown)) != {0, 255}
+    with pytest.raises(TypeError):
+        DetectCircleParams(window_size=301)                             # the Blobs settings are gone
 
 
 def test_obj_learning_matches_the_model(rig, tmp_path):
@@ -163,6 +168,42 @@ def test_obj_learning_matches_the_model(rig, tmp_path):
     assert c.radius == pytest.approx(60.5)
     with pytest.raises(FunctionError) as info:
         rig.run(image=image, algo_method="Obj learning", model_path=tmp_path / "missing.png")
+    assert info.value.code == 9015
+
+
+def marked_mesa(cx: float, cy: float, angle: float) -> np.ndarray:
+    """A mesa with an off-centre bright mark: the model's orientation matters."""
+    h, w = 300, 360
+    yy, xx = np.mgrid[0:h, 0:w].astype(float)
+    a = math.radians(angle)
+    u = (xx - cx) * math.cos(a) - (yy - cy) * math.sin(a)
+    v = (xx - cx) * math.sin(a) + (yy - cy) * math.cos(a)
+    img = np.full((h, w), 40.0)
+    img[np.hypot(u, v) <= 60] = 150.0
+    img[(np.abs(u) <= 20) & (np.abs(v - 25) <= 8)] = 230.0
+    img = ndimage.gaussian_filter(img, 1.0) + np.random.default_rng(2).normal(0.0, 2.0, (h, w))
+    return np.clip(np.rint(img), 0, 255).astype(np.uint8)
+
+
+@pytest.mark.parametrize("matcher", ["numpy", "opencv"])
+def test_obj_learning_finds_a_rotated_model(rig, tmp_path, matcher):
+    """LabVIEW matches the model with a rotation of 0–360°: a model turned by 35° or 120° is found."""
+    from alox.vision import matching
+
+    try:
+        rig.function = DetectCircle(rig.services, matching.create_matcher(matcher))
+    except matching.MatcherUnavailable:
+        pytest.skip(f"{matcher} matcher not available")
+    write_png(tmp_path / "model.png", marked_mesa(182.0, 149.0, 0.0)[89:210, 122:243].copy())   # centre (182, 149)
+    for angle in (35.0, 120.0):
+        report = rig.run(image=marked_mesa(170.0, 160.0, angle), algo_method=AlgoMethod.OBJ_LEARNING,
+                         model_path=tmp_path / "model.png")
+        c = report.best_circle
+        assert (c.x, c.y) == pytest.approx((170.0, 160.0), abs=1.0) and c.radius == 60.5
+        assert report.all_circles[report.best_index].score > 900
+    with pytest.raises(FunctionError) as info:                         # Min Score 100 %: nothing is good enough
+        rig.run(image=marked_mesa(170.0, 160.0, 35.0), algo_method="Obj learning", model_path=tmp_path / "model.png",
+                obj_score=100.0, downsampling=Downsampling.P50)
     assert info.value.code == 9015
 
 
@@ -182,7 +223,7 @@ def test_profile_keys_defaults_and_coercion():
     defaults = DetectCircleParams.from_profile(Store())
     assert (defaults.radius_min_um, defaults.radius_max_um, defaults.min_score, defaults.edge_threshold) == (
         20.0, 50.0, 70.0, 15)
-    assert (defaults.circ_factor_min, defaults.circ_factor_max, defaults.obj_score) == (0.75, 1.25, 75.0)
+    assert (defaults.obj_score, defaults.obj_occlusion) == (75.0, 30.0)
     with pytest.raises(FunctionError) as info:
         DetectCircleParams(algo_method="Hough")
     assert info.value.code == 9002

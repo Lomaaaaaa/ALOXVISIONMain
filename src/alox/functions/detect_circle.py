@@ -2,7 +2,7 @@
 
 Spec: ``docs/vision-core/map.md`` Part 3 §2.1 (common pattern), §3.5 (Detect Circle), Part 4 §3.2 (pre-processing),
 §3.5 (overlays). Diagrams: ``alox_function_ll_detect_circle_state_machine d10`` (pre-processing, Obj learning, best
-circle "Score"), ``d39`` (Shape), ``d44`` (Obj learning), ``d53`` (Blobs), ``d22…d30`` (best circle methods),
+circle "Score"), ``d39`` (Shape), ``d44`` (Obj learning), ``d22…d30`` (best circle methods),
 ``d68`` (DST image, overlays), ``d88`` (results, 9015); ``alox_function_ll_detect_circle_bundle_profile_parameters
 d`` (profile keys ``detect.vcsel.*`` and their defaults). The NI Vision tools are the documented equivalents of
 :mod:`alox.vision.edges`.
@@ -21,9 +21,9 @@ This module also holds what the three functions of this family share: the labell
 Reproduced (LabVIEW): the params cluster and its profile keys and defaults; the radius range µm → pixels by the High
 Mag calibration (``× 1000`` when the unit is mm, the value as is otherwise) and the downsampling factor (``None`` 1,
 ``25%`` 0.75, ``50%`` 0.5, ``75%`` 0.25, ``90%`` 0.1, zero-order resample); grey morphology open, close, erode, dilate
-(k rounded up to odd, skipped below 3); the three methods (``Shape``: circles then ellipses, ellipse radius
-``(minor + major)/2``, minimum score ``× 10``; ``Blobs``: local threshold, invert, remove small particles, remove
-border objects, fill holes, Heywood circularity filter, find circles; ``Obj learning``: model PNG, score ``× 10``);
+(k rounded up to odd, skipped below 3); the methods in use (owner R8: ``Shape``: circles then ellipses, ellipse
+radius ``(minor + major)/2``, minimum score ``× 10``; ``Obj learning`` ("Image"): the model PNG matched with a rotation
+of 0–360°, score ``× 10``);
 centres and radii scaled back to the full image; best circle ``Centered`` (smallest distance to the image centre,
 first wins) and ``Largest`` (largest radius, first wins); ``Found`` = a best index ≥ 0 and at least one circle, else
 error 9015 "detect circle error (no circular vcsel found)"; the overlay group (best circle red, thickness 10; the
@@ -34,12 +34,20 @@ Fixed (internal defects, or behaviour that cannot be kept):
 
 - Best circle ``Score`` kept the circle with the **lowest** score (``<`` against a running minimum, copied from the
   ``Centered`` case, ``d10``); it keeps the highest score here (owner question).
+- ``Blobs`` (``d53``: local threshold, particle filters, ``IMAQ Find Circles``) is not used anymore (owner R8) and is
+  not ported: a recipe that still selects it (``detect.vcsel.method`` 2) runs ``Shape``, with a warning in the
+  application log; its settings (``binarymethod``, ``objecttype``, ``detectkernel``, ``removesmalls``,
+  ``removesmallscount``, ``binaryinvert``, ``removeborder``, ``fillhole``, ``mincircfactor``, ``maxcircfactor``) are
+  not read. The ``Binarized`` and ``Filtered`` output images were Blobs' intermediate images: the pre-processed image
+  is shown instead.
 - ``Obj learning`` flipped the match positions with ``hardware.camera.highmag.hflip/vflip``: the image is already
   flipped by the camera device, so the positions are used as found. The match radius, absent from NI's result, is
   half the smaller side of the model.
 - The model path: ``detect.vcsel.modelpath`` when set, else ``<settings>/profile/mesa_model.png`` (LabVIEW built a
-  path in the Windows documents folder). Rotation (0–360°) and occlusion of the geometric matcher are not available
-  (normalised cross-correlation, :func:`alox.vision.edges.match_template`).
+  path in the Windows documents folder). The geometric matcher is the :class:`alox.vision.matching.Matcher` of Search
+  Object (NI when available, else normalised cross-correlation with a rotation search over 0–360°, up to 50 matches;
+  see :mod:`alox.vision.matching` for how the scores differ); the occlusion range is passed but the correlation
+  matchers ignore it. The template is learned once per model file (and downsampling).
 - The unused parameters (``Rectangle``, ``Occlusion``, ``Extend research``, the Hough ``MRQT`` values, ``Learn Mask
   Path``, ``OBJ LEARNING OCCLUSION``) are kept in the params for the settings panel and ignored, as in V1.2.6.2 or for
   lack of an equivalent (:mod:`alox.vision.edges`).
@@ -70,7 +78,7 @@ from alox.core.functions import (
 from alox.functions.focus import CameraType
 from alox.functions.services import Circle as CircleShape
 from alox.functions.services import Services, Shape, camera_device_name
-from alox.vision import edges
+from alox.vision import edges, matching
 from alox.vision.circles import Circle
 from alox.vision.focus import lv_round, resample_nearest
 from aloxcam.errors import AloxError
@@ -105,6 +113,7 @@ DETECT_CIRCLE_ERROR = 9015                # "detect circle' error (no circular v
 INVALID_CALIBRATION = 9080                # "invalid calibration error"
 
 OVERLAY = "detectcircle"
+MAX_MATCHES = 50                          # matches requested from the matcher (Obj learning)
 RED, BLUE = (255, 0, 0), (0, 0, 255)
 
 
@@ -237,7 +246,8 @@ def run_states(ctx: FunctionContext, start: StrEnum, handlers: Mapping[StrEnum, 
 
 # ================================================================================================== enums
 class AlgoMethod(LabelledEnum):
-    """``alox_typedef_detect_circle_algo_method``."""
+    """``alox_typedef_detect_circle_algo_method``. ``BLOBS`` is kept to read old recipes: it runs ``SHAPE`` (owner
+    R8, module docstring)."""
 
     SHAPE = 0
     OBJ_LEARNING = 1
@@ -322,16 +332,6 @@ _PROFILE_KEYS: dict[str, tuple[str, Any]] = {
     "rectangles": ("rectangles", True),
     "ellipses": ("ellipses", True),
     "circles": ("circles", True),
-    "blob_method": ("binarymethod", 0),
-    "object_type": ("objecttype", 0),
-    "window_size": ("detectkernel", 0),
-    "remove_smalls": ("removesmalls", True),
-    "small_iterations": ("removesmallscount", 0),
-    "binary_invert": ("binaryinvert", True),
-    "remove_border": ("removeborder", True),
-    "fill_holes": ("fillhole", True),
-    "circ_factor_min": ("mincircfactor", 0.75),
-    "circ_factor_max": ("maxcircfactor", 1.25),
     "overlay_best_circle": ("overlaybestcircle", False),
     "overlay_all_circles": ("overlayallcircles", False),
     "overlay_objects": ("overlayobjects", False),
@@ -344,12 +344,11 @@ _PROFILE_KEYS: dict[str, tuple[str, Any]] = {
     "model_path": ("modelpath", ""),
     "mask_path": ("maskpath", ""),
 }
-_INTS = ("morph_open", "morph_close", "morph_dilate", "morph_erode", "edge_threshold", "min_length", "blob_method",
-         "object_type", "window_size", "small_iterations")
-_FLOATS = ("radius_min_um", "radius_max_um", "min_score", "circ_factor_min", "circ_factor_max", "hough_dp",
-           "hough_min_dist", "hough_param1", "hough_param2", "obj_score", "obj_occlusion")
-_BOOLS = ("occlusion", "extend_research", "rectangles", "ellipses", "circles", "remove_smalls", "binary_invert",
-          "remove_border", "fill_holes", "overlay_best_circle", "overlay_all_circles", "overlay_objects")
+_INTS = ("morph_open", "morph_close", "morph_dilate", "morph_erode", "edge_threshold", "min_length")
+_FLOATS = ("radius_min_um", "radius_max_um", "min_score", "hough_dp", "hough_min_dist", "hough_param1",
+           "hough_param2", "obj_score", "obj_occlusion")
+_BOOLS = ("occlusion", "extend_research", "rectangles", "ellipses", "circles", "overlay_best_circle",
+          "overlay_all_circles", "overlay_objects")
 
 
 @dataclass(frozen=True)
@@ -378,17 +377,7 @@ class DetectCircleParams:
     rectangles: bool = True                     # unused in V1.2.6.2
     ellipses: bool = True
     circles: bool = True
-    # Blobs Settings
-    blob_method: int = 0                        # IMAQ Local Threshold method: 0 Niblack, 1 background correction
-    object_type: int = 0                        # 0 bright objects, 1 dark objects
-    window_size: int = 0                        # local threshold window (at least 3 is used)
-    remove_smalls: bool = True
-    small_iterations: int = 0
-    binary_invert: bool = True
-    remove_border: bool = True
-    fill_holes: bool = True
-    circ_factor_min: float = 0.75               # Heywood circularity factor range
-    circ_factor_max: float = 1.25
+    # (Blobs Settings: not used anymore, owner R8)
     # Overlays
     overlay_best_circle: bool = False
     overlay_all_circles: bool = False
@@ -400,7 +389,7 @@ class DetectCircleParams:
     hough_param1: float = 1.25
     # OBJ LEARNING
     obj_score: float = 75.0                     # % (× 10)
-    obj_occlusion: float = 30.0                 # no equivalent (ignored)
+    obj_occlusion: float = 30.0                 # % (occlusion range of the matcher; ignored by correlation)
     model_path: str | Path = ""
     mask_path: str | Path = ""                  # unused (ignored)
     # worker inputs
@@ -461,10 +450,37 @@ class DetectCircle(MeasurementFunction):
 
     name = FunctionName.DETECT_CIRCLE
 
-    def __init__(self, services: Services) -> None:
+    def __init__(self, services: Services, matcher: matching.Matcher | None = None) -> None:
         self.services = services
+        self._matcher = matcher
+        self._templates: dict[tuple[str, float, float], tuple[matching.Template, float]] = {}
         self._last: DetectCircleReport | None = None
         self._params: DetectCircleParams | None = None
+
+    @property
+    def matcher(self) -> matching.Matcher:
+        """The ``Obj learning`` matcher (default :func:`alox.vision.matching.create_matcher`, built at first use)."""
+        if self._matcher is None:
+            self._matcher = matching.create_matcher()
+            log.info("detect circle: %s matcher", self._matcher.name)
+        return self._matcher
+
+    def template(self, path: Path, factor: float) -> tuple[matching.Template, float]:
+        """The learned model of ``path`` at the downsampling ``factor`` and its radius (half the smaller side),
+        cached while the file is unchanged; :class:`FunctionError` 9015 when it cannot be read or learned."""
+        try:
+            key = (str(path), path.stat().st_mtime, factor)
+            if key not in self._templates:
+                model = read_png(path)
+                if model.ndim == 3:
+                    model = model.mean(axis=2)
+                if factor != 1.0:
+                    mh, mw = model.shape
+                    model = resample_nearest(model, max(2, lv_round(mw * factor)), max(2, lv_round(mh * factor)))
+                self._templates = {key: (self.matcher.learn(np.asarray(model)), min(model.shape) / 2.0)}
+        except (OSError, PngError, ValueError, matching.MatcherUnavailable) as exc:
+            raise FunctionError(DETECT_CIRCLE_ERROR, f"detect circle: model image {path}: {exc}") from exc
+        return self._templates[key]
 
     # LabVIEW "Get Results", "Force Results", "Set Params"
     @property
@@ -554,14 +570,13 @@ class _DetectJob:
             work = edges.grey_morphology(work, operation, size)
         r_min = p.radius_min_um / self.pixel_size * factor          # "µm ⇒ Pixels" (downsampled image)
         r_max = p.radius_max_um / self.pixel_size * factor
-        binary = filtered = None
+        method = p.algo_method
+        if method is AlgoMethod.BLOBS:
+            app_log(self.s, "warning", "Detect Circle: the method Blobs is not used anymore, Shape is used "
+                                       "(detect.vcsel.method)")
+            method = AlgoMethod.SHAPE
         try:
-            if p.algo_method is AlgoMethod.SHAPE:
-                found = self._shape(work, r_min, r_max)
-            elif p.algo_method is AlgoMethod.BLOBS:
-                found, binary, filtered = self._blobs(work, r_min, r_max)
-            else:
-                found = self._obj_learning(work)
+            found = self._shape(work, r_min, r_max) if method is AlgoMethod.SHAPE else self._obj_learning(work)
         except FunctionError as exc:
             return self.fail(exc, DCState.DETECT_CIRCLE)
         circles = tuple(edges.DetectedCircle(c.x / factor, c.y / factor, c.radius / factor, c.score) for c in found)
@@ -571,7 +586,7 @@ class _DetectJob:
             best_circle=Circle(circles[best].x, circles[best].y, circles[best].radius) if ok else None,
             all_circles=circles, best_index=best, found=ok, process_time_ms=(self.s.clock() - self.t0) * 1000.0,
             pixel_size_um=self.pixel_size, image_size=(w, h))
-        self._output_image(work, binary, filtered, w, h)
+        self._output_image(work, w, h)
         self._overlay(circles, best)
         self.ctx.set_state(str(DCState.DETECT_CIRCLE), found=ok, best_circle=self.report.best_circle,
                            count=len(circles))
@@ -590,47 +605,23 @@ class _DetectJob:
             found += edges.detect_circles(work, r_min, r_max, ellipses=True, **kwargs)
         return found
 
-    def _blobs(self, work: np.ndarray, r_min: float, r_max: float
-               ) -> tuple[list[edges.DetectedCircle], np.ndarray, np.ndarray]:
-        p = self.p
-        mask = edges.local_threshold(work, p.window_size, method=p.blob_method, dark_objects=p.object_type == 1)
-        if p.binary_invert:
-            mask = ~mask
-        if p.remove_smalls:
-            mask = edges.remove_small_particles(mask, p.small_iterations)
-        if p.remove_border:
-            mask = edges.reject_border(mask)
-        if p.fill_holes:
-            mask = edges.fill_holes(mask)
-        binary = mask
-        found = edges.find_blob_circles(mask, r_min, r_max, circularity_min=p.circ_factor_min,
-                                        circularity_max=p.circ_factor_max)
-        filtered = np.zeros_like(mask)
-        for c in found:
-            yy, xx = np.ogrid[:mask.shape[0], :mask.shape[1]]
-            filtered |= mask & ((xx - c.x) ** 2 + (yy - c.y) ** 2 <= (c.radius * 1.5) ** 2)
-        return found, binary, filtered
-
     def _obj_learning(self, work: np.ndarray) -> list[edges.DetectedCircle]:
+        """``IMAQ Setup/Match Geometric Pattern 2`` (rotation 0–360°, score × 10) with the model PNG."""
         p = self.p
         path = Path(str(p.model_path)) if str(p.model_path) else None
         if path is None and self.s.folders is not None:
             path = Path(self.s.folders.profile) / "mesa_model.png"
         if path is None:
             raise FunctionError(DETECT_CIRCLE_ERROR, "detect circle: no model image (Search Model Path)")
-        try:
-            model = read_png(path)
-        except (OSError, PngError, ValueError) as exc:
-            raise FunctionError(DETECT_CIRCLE_ERROR, f"detect circle: model image {path}: {exc}") from exc
-        if model.ndim == 3:
-            model = model.mean(axis=2)
         factor = p.downsampling.factor
-        if factor != 1.0:
-            mh, mw = model.shape
-            model = resample_nearest(model, max(2, lv_round(mw * factor)), max(2, lv_round(mh * factor)))
-        radius = min(model.shape) / 2.0
-        return [edges.DetectedCircle(m.x, m.y, radius, m.score)
-                for m in edges.match_template(work, model, min_score=p.obj_score * 10.0)]
+        template, radius = self.f.template(path, factor)
+        settings = matching.MatchSettings(number_of_matches=MAX_MATCHES, min_score=p.obj_score * 10.0,
+                                          angle_ranges=((0.0, 360.0),), occlusion_range=(0.0, p.obj_occlusion))
+        try:
+            matches = self.f.matcher.match(work, template, settings)
+        except (matching.MatcherUnavailable, matching.TemplateError, ValueError) as exc:
+            raise FunctionError(DETECT_CIRCLE_ERROR, f"detect circle: object learning: {exc}") from exc
+        return [edges.DetectedCircle(m.position[0], m.position[1], radius, m.score) for m in matches]
 
     def _best(self, circles: tuple[edges.DetectedCircle, ...], w: int, h: int) -> int:
         """``Best Circle Method`` (``d22…d30``): first strict best wins; −1 when there is no circle."""
@@ -646,17 +637,12 @@ class _DetectJob:
                 best, best_key = i, key
         return best
 
-    def _output_image(self, work: np.ndarray, binary: np.ndarray | None, filtered: np.ndarray | None,
-                      w: int, h: int) -> None:
-        """"Update DST image": the selected intermediate image, rescaled to the image size ("Rescale TMP image")."""
-        kind = self.p.output_image_type
-        if kind is OutputImageType.SOURCE:
+    def _output_image(self, work: np.ndarray, w: int, h: int) -> None:
+        """"Update DST image": the selected intermediate image, rescaled to the image size ("Rescale TMP image");
+        ``Binarized`` / ``Filtered`` (Blobs' images) show the pre-processed image."""
+        if self.p.output_image_type is OutputImageType.SOURCE:
             return
         out = work
-        if kind is OutputImageType.BINARIZED and binary is not None:
-            out = binary.astype(np.uint8) * 255
-        elif kind is OutputImageType.FILTERED and filtered is not None:
-            out = filtered.astype(np.uint8) * 255
         if out.shape != (h, w):
             out = resample_nearest(out, w, h)
         self.s.images.put(self.camera, np.ascontiguousarray(out), metadata={"function": "detect_circle"})

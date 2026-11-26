@@ -182,3 +182,29 @@ def test_match_template_finds_the_model():
     found = edges.match_template(img, model, min_score=900)
     assert found and (found[0].x, found[0].y) == pytest.approx((round(CX), round(CY)), abs=0.5)
     assert found[0].score == pytest.approx(1000, abs=1)
+
+
+def test_rotated_rake_and_straight_edge():
+    roi = edges.RotatedRect(100.0, 80.0, 40.0, 20.0, 90.0)              # turned a quarter: 20 wide, 40 high
+    corners = np.array(roi.corners())
+    assert corners.min(axis=0) == pytest.approx((90.0, 60.0)) and corners.max(axis=0) == pytest.approx((110.0, 100.0))
+    lines = edges.rake_lines(edges.RotatedRect(50.0, 50.0, 40.0, 20.0), step=5.0,
+                             direction=edges.RakeDirection.LEFT_TO_RIGHT)
+    assert len(lines) == 5 and lines[0] == ((30.0, 40.0), (70.0, 40.0)) and lines[2] == ((30.0, 50.0), (70.0, 50.0))
+    back = edges.rake_lines(edges.RotatedRect(50.0, 50.0, 40.0, 20.0), step=5.0,
+                            direction=edges.RakeDirection.BOTTOM_TO_TOP)
+    assert len(back) == 9 and back[0] == ((30.0, 60.0), (30.0, 40.0))
+    # a straight edge turned by 10° clockwise (as displayed) from the vertical: direction 80°
+    yy, xx = np.mgrid[0:200, 0:200].astype(float)
+    a = math.radians(10.0)
+    img = np.where((xx - 100.0) * math.cos(a) + (yy - 100.0) * math.sin(a) > 0, 160.0, 40.0)
+    img = ndimage.gaussian_filter(img, 1.0)
+    square = edges.RotatedRect(100.0, 100.0, 120.0, 120.0)
+    found = edges.find_straight_edge(img, square, direction=edges.RakeDirection.LEFT_TO_RIGHT,
+                                     options=EdgeOptions(), step=5.0)
+    assert found.found and found.score == 1000.0 and found.angle == pytest.approx(80.0, abs=0.3)
+    across = edges.find_straight_edge(img, square, direction=edges.RakeDirection.TOP_TO_BOTTOM,
+                                      options=EdgeOptions(), step=5.0)
+    assert across.score < 300.0
+    pairs = edges.first_last_edges(img, [((50.0, 100.0), (150.0, 100.0)), ((50.0, 20.0), (60.0, 20.0))], EdgeOptions())
+    assert pairs == [None, None]                                        # one edge, then none: no first + last pair
