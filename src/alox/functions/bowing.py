@@ -107,7 +107,8 @@ Fixed (internal defects, or behaviour that cannot be kept):
 - The ``dZ`` column of ``Z Measures`` (sm d176) is replaced in a 3-column array: LabVIEW's ``Replace Array Subset``
   ignores it; not reproduced (no effect).
 - Z is not moved to Zwafer2 when it was not measured (LabVIEW sent a move to NaN after an early error).
-- Invalid parameters (Measure Distance not > 0, non-finite values) are refused before any motion: status 1000 and
+- Invalid parameters or settings (Measure Distance not > 0, non-finite values, a coordinate system not 0…3) are
+  refused before any motion: status 1000 and
   :class:`BowingError` 9002 (LabVIEW measured the centre five times and ended out of range).
 - The joystick re-check of ``Start`` (sm d17: ``Joystick Enabled?`` then ``Disable``) is replaced by the disable
   before the loop (the same effect).
@@ -532,13 +533,12 @@ class BowingMeasurement(MeasurementFunction):
 
     # ---------------------------------------------------------------------------------------------- run
     def run(self, params: Any, ctx: FunctionContext) -> BowingReport:
+        job = ctx.job if ctx.job is not None else getattr(params, "job", None) or JobInfo()
         try:
-            p = self.params_for(params).check()
-        except BowingError:
+            bow = _BowingJob(self, self.params_for(params).check(), job, ctx)
+        except BowingError:                                         # invalid parameters or settings: no motion
             self.services.set_status("bowing", int(BowingStatus.ERROR))
             raise
-        job = ctx.job if ctx.job is not None else getattr(params, "job", None) or JobInfo()
-        bow = _BowingJob(self, p, job, ctx)
         try:
             report = bow.execute()
         except BowingFailed as exc:
@@ -567,7 +567,9 @@ class _BowingJob:
                                           p.measure_distance_mm, centre=centre)
         self.origin = (_float(self.get("hardware.xy.waferxorg", 0.0), "hardware.xy.waferxorg"),
                        _float(self.get("hardware.xy.waferyorg", 0.0), "hardware.xy.waferyorg"))
-        self.system = int(self.get("hardware.xy.stagescoordsys", 3))
+        self.system = int(_float(self.get("hardware.xy.stagescoordsys", 3), "hardware.xy.stagescoordsys"))
+        if self.system not in (0, 1, 2, 3):
+            raise _invalid(f"bowing: hardware.xy.stagescoordsys must be 0…3, got {self.system}")
         self.xy = self.s.devices["xy"]
         self.state = BowState.START
         self.rows: list[list[float]] = []               # Z Measures: [x, y, z] (wafer mm, Z mm)
@@ -1024,7 +1026,6 @@ class _BowingJob:
         self.set_status(BowingStatus.FINISHED)                      # 500
         self.quiet_pause(self.o.finished_pause_s)
         self.wavelength_back()
-        self.app_log("info", "Bowing (Finished)")
         return self.report()
 
     def save_data(self, *, error: bool) -> None:
@@ -1077,7 +1078,6 @@ class _BowingJob:
         self.event("BOW Finished", values=self.values)
         if self.s.publish is not None:
             self.s.publish(reports.function_event("failed", REPORT_NAME, self.job))
-        self.app_log("info", "BOWING (Stopped)")
 
     def report(self) -> BowingReport:
         return BowingReport(job=self.job, values=self.values,

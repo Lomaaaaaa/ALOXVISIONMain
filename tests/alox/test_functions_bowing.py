@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 import threading
 from collections.abc import Callable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,7 +18,14 @@ import pytest
 from alox.api.backend import Measure
 from alox.core.core import MeasureRequest
 from alox.core.folders import Folders
-from alox.core.functions import FunctionContext, FunctionName, FunctionRunner, JobInfo, MeasurementFunction, Stopped
+from alox.core.functions import (
+    FunctionContext,
+    FunctionName,
+    FunctionRunner,
+    JobInfo,
+    MeasurementFunction,
+    Stopped,
+)
 from alox.core.status import FunctionStatusID
 from alox.devices.base import DeviceError
 from alox.devices.xy import WaferSettings, XYSettings, XYStage
@@ -39,16 +46,22 @@ from alox.functions.bowing import (
     refocus_params_from_profile,
     wafer_to_stage,
 )
-from alox.functions.focus import AutofocusMethod, AutofocusParams, CameraType, FocusResult, RefocusParams
+from alox.functions.focus import (
+    AutofocusMethod,
+    AutofocusParams,
+    CameraType,
+    FocusResult,
+    RefocusParams,
+)
 from alox.functions.get_image import stage_to_wafer
-from alox.functions.registry import register_functions
+from alox.functions.registry import FACTORIES, register_functions
 from alox.functions.services import Services
 from aloxcam.settings import SimulationOptions
 from aloxcam.zstage.sim import SimStage
 
 SIM = SimulationOptions(stage_min_mm=0.0, stage_max_mm=200.0, stage_reference_s=0.01)
 ORIGIN = (100.0, 100.0)
-WHEN = datetime(2026, 11, 26, 9, 15, 30)
+WHEN = datetime(2026, 11, 26, 9, 15, 30, tzinfo=UTC)
 JOB = JobInfo(control_job_id="CJ1", process_job_id="PJ1", lot_id="LOT1", wafer_id="W01", zone_id="0")
 WAFER, OFFSET, ANGLE, DIST = 100.0, 5.0, 45.0, 40.0
 
@@ -456,7 +469,7 @@ def test_reset_wavelength_error(rig: Callable[..., SimpleNamespace]) -> None:
         r.bowing.run(None, r.ctx)
     assert err.value.code == 9403 and err.value.status == 1001 and err.value.state == "Start"
     assert statuses(r) == [201, 1001] and not r.af.calls
-    assert ("move", math.nan, False) not in r.z.calls and not [c for c in r.z.calls if c[0] == "move"]
+    assert not [c for c in r.z.calls if c[0] == "move"]                # Zwafer2 not measured: Z not moved
 
 
 def test_fast_method_ends_in_the_default_case(rig: Callable[..., SimpleNamespace]) -> None:
@@ -504,8 +517,8 @@ def test_without_get_image_and_waiting_as_labview(rig: Callable[..., SimpleNames
 def test_registry_builds_it(rig: Callable[..., SimpleNamespace]) -> None:
     r = rig()
     runner = FunctionRunner()
-    outcome = register_functions(runner, r.services, {FunctionName.BOWING_MEASURE: __import__(
-        "alox.functions.registry", fromlist=["FACTORIES"]).FACTORIES[FunctionName.BOWING_MEASURE]})
+    outcome = register_functions(runner, r.services,
+                                 {FunctionName.BOWING_MEASURE: FACTORIES[FunctionName.BOWING_MEASURE]})
     assert outcome == {FunctionName.BOWING_MEASURE: "registered"}
     with pytest.raises(LookupError):
         BowingMeasurement(Services())

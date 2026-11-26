@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -12,7 +12,7 @@ from alox.core.folders import Folders
 from alox.core.functions import JobInfo
 from alox.functions import jobfiles
 
-WHEN = datetime(2026, 11, 26, 14, 32, 10)
+WHEN = datetime(2026, 11, 26, 14, 32, 10, tzinfo=UTC)
 JOB = JobInfo(control_job_id="CJ", process_job_id="PJ1", lot_id="LOT 7", wafer_id="W03", zone_id="0")
 
 
