@@ -46,7 +46,6 @@ from alox.devices.xy import XYSettings, XYStage, build_xy_backends, load_xy_sett
 from alox.devices.zstage import ZStage, build_stage_backend
 from alox.events import Event, EventBus
 from aloxcam.camera.backend import CameraBackend, CameraDevice
-from aloxcam.camera.sim import SimCameraBackend
 from aloxcam.config.alox_ini import load_alox_ini
 from aloxcam.errors import CameraError, Code
 from aloxcam.eventlog import DailyFileHandler
@@ -164,10 +163,14 @@ class Application:
         self.typed_ini = TypedIni.load(alox_ini) if alox_ini and alox_ini.exists() else None
         self.devices: dict[str, Device] = {}
         self._camera_backend: CameraBackend | None = None
+        self.simulators: dict[str, Any] = {}             # simulate: the simulated controllers, read by the scene
+        self.scene: Any = None                           # simulate: the wafer scene (alox.devices.scene)
         wanted = set(config.devices)
         if "z" in wanted:
             options = StageOptions(port_map=dict(config.port_map), always_reference=config.always_reference)
             backend = build_stage_backend(simulate=config.simulate, simulation=SimulationOptions(stage=True))
+            if config.simulate:
+                self.simulators["z"] = backend
             self.add(ZStage(backend, self.settings.z, options, publish=self.events.publish))
         if "xy" in wanted:
             self.add(self._build_xy())
@@ -196,6 +199,7 @@ class Application:
         settings = load_xy_settings(self.typed_ini) if self.typed_ini is not None else XYSettings()
         if self.config.simulate:
             backends = build_xy_backends(simulate=True)
+            self.simulators["x"], self.simulators["y"] = backends
         else:
             from alox.devices.gcs_chain import GcsChain
             port_name = f"COM{settings.x.com if settings.x.com > 0 else 1}"
@@ -215,13 +219,19 @@ class Application:
         if mapped is not None:
             settings = replace(settings, port=mapped)
         backend = build_monochromator_backend(simulate=self.config.simulate)
+        if self.config.simulate:
+            self.simulators["wl"] = backend.emulator                        # type: ignore[attr-defined]
         return Monochromator(backend, settings, publish=self.events.publish)
 
     def _cameras(self) -> CameraBackend:
         """One driver for both cameras: simulated, or the GenICam backend on the configured GenTL producer."""
         if self._camera_backend is None:
-            if self.config.simulate:
-                self._camera_backend = SimCameraBackend(SimulationOptions(cameras=True))
+            if self.config.simulate:                      # the cameras see the simulated wafer scene
+                from alox.devices.scene import SceneCameraBackend
+
+                backend = SceneCameraBackend.for_application(self)
+                self.scene = backend.scene
+                self._camera_backend = backend
             else:
                 try:
                     from alox.devices.camera_genicam import GenICamBackend

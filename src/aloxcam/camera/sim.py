@@ -9,7 +9,10 @@ the first 4 pixels of row 0 (:func:`frame_number_of` reads it back). Continuous 
 ``aloxcam-simcam-<name>`` produces frames at the ``AcquisitionFrameRate`` attribute (≤ ``max_frame_rate``); one-shot
 (Sequence): ``num_buffers`` frames per start, then the counter stops while ``acquisition_in_progress`` stays TRUE.
 ``TriggerMode = "On"``: no free-running frames, one frame per ``TriggerSoftware``. ``manual=True``: no grab thread,
-frames only through :meth:`SimCameraDevice.emit_frame` (and software triggers). A camera is opened exclusively: a
+frames only through :meth:`SimCameraDevice.emit_frame` (and software triggers). ``frame_source(device, number)``
+(optional) replaces the gradient: it returns the frame's ``image_height × image_width`` pixels (called in the
+producing thread, under the device lock; e.g. the wafer scene of :mod:`alox.devices.scene`), the frame number is
+still written into row 0. A camera is opened exclusively: a
 second ``open_camera`` of an open name fails. Failures raise ``CameraError(9502, …)``; a closed device raises
 ``-1074360316`` ("invalid camera session").
 """
@@ -52,6 +55,7 @@ __all__ = [
     "SIM_FRAME_RATE",
     "SIM_GAIN",
     "SIM_GAIN_ANALOG",
+    "FrameSource",
     "SimCameraBackend",
     "SimCameraDevice",
     "frame_number_of",
@@ -137,14 +141,18 @@ def _node_map(options: SimulationOptions) -> dict[str, _Node]:
 
 _ALIASES: Mapping[str, str] = MappingProxyType({SIM_EXPOSURE_TIME: SIM_EXPOSURE, SIM_GAIN_ANALOG: SIM_GAIN})
 
+#: ``frame_source(device, frame number)`` → the pixels of the frame (2-D, ``image_height × image_width``).
+FrameSource = Callable[["SimCameraDevice", int], np.ndarray]
+
 
 class SimCameraDevice(CameraDevice):
     """One simulated camera session. Thread-safe (one lock; the grab thread produces frames under it)."""
 
     def __init__(self, name: str, options: SimulationOptions, *, clock: Callable[[], float] = time.monotonic,
-                 manual: bool = False) -> None:
+                 manual: bool = False, frame_source: FrameSource | None = None) -> None:
         self.name = name
         self._options = options
+        self._frame_source = frame_source
         self._clock = clock
         self._manual = manual
         self._dtype = np.dtype(np.uint16) if options.pixel_type.strip().upper() == "U16" else np.dtype(np.uint8)
@@ -464,6 +472,8 @@ class SimCameraDevice(CameraDevice):
         return frame
 
     def _pixels(self, number: int) -> np.ndarray:
+        if self._frame_source is not None:
+            return self._stamp(np.array(self._frame_source(self, number), dtype=self._dtype), number)
         exposure = float(self._nodes[SIM_EXPOSURE].value)
         if self._gradient is None or self._gradient[0] != exposure:
             top = float(np.iinfo(self._dtype).max)
@@ -472,6 +482,10 @@ class SimCameraDevice(CameraDevice):
             self._gradient = (exposure, np.rint(np.clip(ramp, 0.0, top)).astype(self._dtype))
         row = self._gradient[1]
         img = np.repeat(row[np.newaxis, :], max(1, self._options.image_height), axis=0)
+        return self._stamp(img, number)
+
+    @staticmethod
+    def _stamp(img: np.ndarray, number: int) -> np.ndarray:
         n = number & U32_MASK
         for i in range(min(4, img.shape[1])):
             img[0, i] = (n >> (8 * (3 - i))) & 0xFF
@@ -507,10 +521,11 @@ class SimCameraBackend(CameraBackend):
     """Simulated NI-IMAQdx driver (design §3.6.2). Thread-safe."""
 
     def __init__(self, options: SimulationOptions, *, clock: Callable[[], float] = time.monotonic,
-                 manual: bool = False) -> None:
+                 manual: bool = False, frame_source: FrameSource | None = None) -> None:
         self.options = options
         self._clock = clock
         self._manual = manual
+        self._frame_source = frame_source
         self._lock = threading.Lock()
         self._devices: dict[str, SimCameraDevice] = {}
         self._closed = False
@@ -539,7 +554,8 @@ class SimCameraBackend(CameraBackend):
             old = self._devices.get(name)
             if old is not None and not old.closed:
                 raise _sim_error(f"IMAQdx Open Camera: camera '{name}' is already open (simulation)")
-            device = SimCameraDevice(name, self.options, clock=self._clock, manual=self._manual)
+            device = SimCameraDevice(name, self.options, clock=self._clock, manual=self._manual,
+                                     frame_source=self._frame_source)
             self._devices[name] = device
             return device
 
