@@ -52,17 +52,17 @@ def small_table() -> list[list[float]]:
 
 # ---------------------------------------------------------------------------------------------- defaults
 def test_default_tables() -> None:
-    assert DEFAULT_WAVELENGTHS == (0, *range(700, 951, 25))
-    assert len(DEFAULT_EXPOSURES_US) == 12
-    assert (DEFAULT_EXPOSURES_US[0], DEFAULT_EXPOSURES_US[1], DEFAULT_EXPOSURES_US[-1]) == (27000, 18000, 628000)
+    assert DEFAULT_WAVELENGTHS == tuple(range(700, 951, 25))               # owner D4: no 0 nm row, from 700 nm
+    assert len(DEFAULT_EXPOSURES_US) == 11
+    assert (DEFAULT_EXPOSURES_US[0], DEFAULT_EXPOSURES_US[-1]) == (18000, 628000)
     table = default_table()
-    assert len(table) == 12
-    assert same(table[0], [0, 27000, 21600, 32400, nan, nan, nan])
-    assert same(table[7], [850, 132000, 105600, 158400, nan, nan, nan])
-    assert table[6][2:4] == [69680.0, 104520.0]                            # 87100 ∓ 20 %
+    assert len(table) == 11
+    assert same(table[0], [700, 18000, 14400, 21600, nan, nan, nan])
+    assert same(table[6], [850, 132000, 105600, 158400, nan, nan, nan])
+    assert table[5][2:4] == [69680.0, 104520.0]                            # 87100 ∓ 20 %
     assert same(default_table((700,), (1000,), 150)[0], [700, 1000, 0, 2000, nan, nan, nan])   # % coerced to 100
-    assert len(PROFILE_DEFAULT_TABLE) == 12 and all(len(r) == 7 for r in PROFILE_DEFAULT_TABLE)
-    assert PROFILE_DEFAULT_TABLE[1] == (700.0, 25000.0, 10000.0, 40000.0, 50.0, 100.0, 25000.0)
+    assert len(PROFILE_DEFAULT_TABLE) == 11 and all(len(r) == 7 for r in PROFILE_DEFAULT_TABLE)
+    assert PROFILE_DEFAULT_TABLE[0] == (700.0, 25000.0, 10000.0, 40000.0, 50.0, 100.0, 25000.0)
     assert PROFILE_DEFAULT_TABLE[-1][:2] == (950.0, 750000.0)
 
 
@@ -118,11 +118,11 @@ def test_create_default_and_exposure_for() -> None:
     assert "general.exposures" in profile.values
     assert lut.exposure_for(700) == 18000
     assert lut.exposure_for(712.5) == 19000
-    assert lut.exposure_for(350) == pytest.approx(27000 + 350 * (18000 - 27000) / 700)   # the 0 nm row
+    assert lut.exposure_for(350) == 18000                                  # below the table: its first row
     assert lut.exposure_for(2000) == 628000
     assert lut.has_fixed_expo()
     assert not lut.has_auto_expo()
-    assert isinstance(lut.rows()[1], ExposureRow) and lut.rows()[1].expo_th == 18000
+    assert isinstance(lut.rows()[0], ExposureRow) and lut.rows()[0].expo_th == 18000
 
 
 def test_fixed_expo_get_set() -> None:
@@ -242,7 +242,7 @@ def test_csv_export_and_round_trip(tmp_path: Path) -> None:
     lut.create_default()
     path = lut.export_csv(tmp_path / "out.csv")
     lines = path.read_bytes().decode("cp1252").split("\r\n")
-    assert lines[0] == "0\t27000\t21600\t32400\tNaN\tNaN\tNaN"
+    assert lines[0] == "700\t18000\t14400\t21600\tNaN\tNaN\tNaN"
     assert lines[-1] == ""
     write_csv([[700.4, 1000.6]], tmp_path / "r.csv")
     assert (tmp_path / "r.csv").read_bytes() == b"700\t1001\r\n"
@@ -259,7 +259,7 @@ def test_table_is_stored_in_the_profile_property(tmp_path: Path) -> None:
     lut.set_auto_expo(725, AutoExposureData(21000, 18000, 24000, 50, 200))
     store.save()
     text = (tmp_path / "recipe.ini").read_bytes().decode("cp1252")
-    assert text.startswith('[general]\r\nexposures_TABLE.<size(s)> = "12 7"\r\nexposures_TABLE 0 = 0,000000\r\n')
+    assert text.startswith('[general]\r\nexposures_TABLE.<size(s)> = "11 7"\r\nexposures_TABLE 0 = 700,000000\r\n')
     reloaded = ExposureTable(ProfileProperties.read(tmp_path / "recipe.ini"))
     assert all(same(a, b) for a, b in zip(reloaded.table(), lut.table(), strict=True))
     assert reloaded.auto_expo(725)[1].auto_expo == 21000

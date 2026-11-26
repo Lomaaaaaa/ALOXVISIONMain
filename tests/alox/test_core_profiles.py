@@ -213,7 +213,7 @@ def test_new_from_defaults_file(manager: ProfileManager, tmp_path: Path) -> None
     reloaded = manager.load("FRESH")
     assert reloaded.get("tilt.method") == 1
     assert reloaded.suffix_of("general.exposures") == "TABLE"
-    assert len(reloaded.get("general.exposures")) == 12
+    assert len(reloaded.get("general.exposures")) == 11
 
 
 def test_new_with_a_missing_template_keeps_the_active_profile(manager: ProfileManager, tmp_path: Path) -> None:

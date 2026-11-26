@@ -12,8 +12,9 @@ The table has one row per wavelength and 7 columns (diagram note, ``alox_manager
 Observed in ``alox_manager_exposure_wl_lut`` (d0..d27):
 
 - "Create Default" (d3, d6): the globals ``Alox Def WL Table`` and ``Alox Def Exp Table (µs)`` (front panel of
-  ``alox_core_global_variables p``: :data:`DEFAULT_WAVELENGTHS`, :data:`DEFAULT_EXPOSURES_US`, 12 values each, the first
-  wavelength being **0 nm**); ExpoMin/Max = ExpoTh ∓ ExpoTh·20/100 ("Def. Variation %" 20, coerced to 0..100); BMin,
+  ``alox_core_global_variables p``: 12 values each, the first wavelength being **0 nm**; owner's decision D4: that row is
+  not used and the default tables start at 700 nm, so :data:`DEFAULT_WAVELENGTHS` and :data:`DEFAULT_EXPOSURES_US` hold
+  the 11 rows from 700 nm); ExpoMin/Max = ExpoTh ∓ ExpoTh·20/100 ("Def. Variation %" 20, coerced to 0..100); BMin,
   BMax, ExpoAuto = NaN.
 - "Import CSV" (d4, d5): ``Read Delimited Spreadsheet (DBL)`` with a **tab** delimiter; columns 1 and 2 mandatory;
   ExpoMin/Max from columns 3 and 4 when the file has at least 4 columns, else ExpoTh ∓ 20 % (constant ``0,2``); BMin,
@@ -34,7 +35,7 @@ Observed in ``alox_manager_exposure_wl_lut`` (d0..d27):
 - TODO in d0 (kept): "REVOIR LA TABLE D'EXPOS THEORIQUES PAR DEFAUT INADAPTEE AUX CAMERAS DU MODULE OPTO".
 
 A second default table is a constant of ``alox_manager_profile d0`` (:data:`PROFILE_DEFAULT_TABLE`, used by profile
-"New"/"Check"); the init cycle only calls "Create Default" when the profile has no wavelength.
+"New"/"Check"; its 0 nm row is dropped too, D4); the init cycle only calls "Create Default" when the profile has no wavelength.
 """
 
 from __future__ import annotations
@@ -82,10 +83,10 @@ AE_DATA_NOT_AVAILABLE = 9092
 INVALID_WAVELENGTH = 9093
 
 #: ``Alox Def WL Table`` (nm), front panel of ``alox_core_global_variables p``: 12 elements, the first one is 0.
-DEFAULT_WAVELENGTHS: tuple[int, ...] = (0, 700, 725, 750, 775, 800, 825, 850, 875, 900, 925, 950)
+DEFAULT_WAVELENGTHS: tuple[int, ...] = (700, 725, 750, 775, 800, 825, 850, 875, 900, 925, 950)
 #: ``Alox Def Exp Table (µs)``, same front panel, paired element by element with :data:`DEFAULT_WAVELENGTHS`.
-DEFAULT_EXPOSURES_US: tuple[int, ...] = (27000, 18000, 20000, 24000, 36000, 55000, 87100, 132000, 189000, 277000,
-                                         414000, 628000)
+DEFAULT_EXPOSURES_US: tuple[int, ...] = (18000, 20000, 24000, 36000, 55000, 87100, 132000, 189000, 277000, 414000,
+                                         628000)
 #: "Def. Variation %" of "Create Default" (d3) and the ``0,2`` of "Import CSV" (d5).
 DEFAULT_VARIATION_PERCENT = 20.0
 _IMPORT_FACTOR = 0.2
@@ -93,7 +94,7 @@ _IMPORT_FACTOR = 0.2
 #: The 12 × 7 constant of ``alox_manager_profile d0`` (default of the profile property ``general.exposures``).
 PROFILE_DEFAULT_TABLE: tuple[tuple[float, ...], ...] = tuple(
     (float(wl), float(th), 10000.0, 40000.0, 50.0, 100.0, float(th))
-    for wl, th in ((0, 20000), (700, 25000), (725, 30000), (750, 45000), (775, 70000), (800, 125000), (825, 200000),
+    for wl, th in ((700, 25000), (725, 30000), (750, 45000), (775, 70000), (800, 125000), (825, 200000),
                    (850, 300000), (875, 450000), (900, 500000), (925, 600000), (950, 750000)))
 
 
