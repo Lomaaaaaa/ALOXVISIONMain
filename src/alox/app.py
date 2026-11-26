@@ -33,6 +33,7 @@ from alox import __version__
 from alox.config import TypedIni
 from alox.core.core import Core
 from alox.core.folders import resolve_folders
+from alox.core.images import ImageStore
 from alox.devices.base import Device, DeviceError, DeviceState
 from alox.devices.camera import Camera
 from alox.devices.monochromator import (
@@ -142,10 +143,13 @@ class Application:
         self.websocket: Any = None
         self.exit_requested = threading.Event()
         self.functions: dict[Any, str] = {}
+        self.live: Any = None
         alox_ini = config.alox_ini
         if config.core:
             folders = resolve_folders(config.setup_ini, config.settings_dir)
             self.core = Core(folders, events=self.events)
+            self.core.images = ImageStore(publish=self.events.publish, profile=self.core.profile_manager,
+                                          has_client=lambda: self.websocket is not None and self.websocket.clients > 0)
             self.core.on_shutdown = self.exit_requested.set
             self.core.boot()                                  # creates alox.ini from alox_default.ini when missing
             if alox_ini is None:
@@ -237,7 +241,22 @@ class Application:
             if self.config.api:
                 self._start_api()
             self.core.start(self._open_device)
+            self._start_live_view()
         return {name: str(device.state) for name, device in self.devices.items()}
+
+    def _start_live_view(self) -> None:
+        """The continuous Get Image of the display while no function runs (changelog 1.0.0.11)."""
+        from alox.core.functions import FunctionName
+        from alox.functions.get_image import GetImage, LiveView
+
+        assert self.core is not None
+        try:
+            function = self.core.functions.function(FunctionName.GET_IMAGE)
+        except KeyError:
+            return
+        if isinstance(function, GetImage):
+            self.live = LiveView(function, self.core.functions)
+            self.live.start()
 
     def _open_device(self, device: Device) -> None:
         device.start()
@@ -270,8 +289,13 @@ class Application:
 
     def stop(self) -> None:
         """Stop the core and the API, shut every device down (idempotent), then release the camera driver."""
+        if self.live is not None:
+            self.live.stop()
+            self.live = None
         if self.core is not None:
             self.core.stop()
+            if self.core.images is not None:
+                self.core.images.close()                         # type: ignore[attr-defined]
         if self.rest is not None:
             self.rest.stop()
             self.rest = None

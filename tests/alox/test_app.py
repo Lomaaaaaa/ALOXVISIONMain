@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 import pytest
 
 from alox.app import AppConfig, Application, _port_map, main
+from alox.core.functions import FunctionName
 from alox.devices.base import DeviceState
 
 
@@ -107,6 +109,11 @@ def test_whole_application_serves_the_api_in_simulation(tmp_path: Path):
             assert httpx.get(f"{base}/system/profiles").json() == {"profiles": ["DEFAULT"]}
             message = json.loads(ws.recv(timeout=5))
             assert message["event"] in ("heartbeat", "status")
+            assert app.functions[FunctionName.GET_IMAGE] == "registered" and app.live is not None
+            end = time.monotonic() + 10
+            while not httpx.get(f"{base}/camera/jpegimage").content and time.monotonic() < end:
+                time.sleep(0.05)                                         # the live view fills the display
+            assert httpx.get(f"{base}/camera/jpegimage").content[:2] == b"\xff\xd8"
             assert httpx.put(f"{base}/system/shutdown").status_code == 200
             assert app.exit_requested.wait(5)
     assert app.core is not None and app.core.system.code == 800

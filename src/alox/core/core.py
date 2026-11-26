@@ -90,7 +90,9 @@ _MODULE_STATUS = {"camz": SystemCode.INIT_CAMERAS_Z_MODULE, "xy": SystemCode.INI
 
 
 class ImageSource(Protocol):
-    """The image manager as the core uses it (implemented in a later phase)."""
+    """The image manager as the core uses it (:class:`alox.core.images.ImageStore`). The overlay switch is
+    ``enable_overlay``: ``set_overlay(name, shapes)`` is the functions' side of the same manager
+    (:class:`alox.functions.services.ImageSink`)."""
 
     def image_info(self, camera: str) -> tuple[int, float | None]:
         """``(images acquired, time of the last one)`` of ``camera``."""
@@ -107,7 +109,7 @@ class ImageSource(Protocol):
     def overlay(self, name: str) -> bool:
         ...
 
-    def set_overlay(self, name: str, on: bool) -> None:
+    def enable_overlay(self, name: str, on: bool) -> None:
         ...
 
     def overlays(self) -> list[str]:
@@ -567,7 +569,7 @@ class Core:
         return self._images().overlay(name)
 
     def set_overlay(self, name: str, on: bool) -> None:
-        self._images().set_overlay(name, on)
+        self._images().enable_overlay(name, on)
 
     def jpeg(self, quality: int, width: int, height: int) -> bytes:
         return self._images().jpeg(quality, width, height)
