@@ -159,10 +159,10 @@ class SceneParams:
     reflectance_aperture: float = 0.80
     reflectance_mark: float = 0.95
     reflectance_chuck: float = 0.18
-    texture_wafer: float = 0.015             # amplitude (std, reflectance) and grain (µm)
-    texture_wafer_um: float = 4.0
+    texture_wafer: float = 0.03              # amplitude (std, reflectance) and grain (µm)
+    texture_wafer_um: float = 1.5
     texture_chuck: float = 0.25
-    texture_chuck_um: float = 6.0
+    texture_chuck_um: float = 2.0
     # oxide contrast: R_oxide = R_aperture · (1 − c(λ)), c = min + (max − min)·exp(−((λ − peak)/width)²)
     contrast_peak_nm: float = 850.0
     contrast_width_nm: float = 60.0
