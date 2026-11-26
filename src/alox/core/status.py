@@ -373,6 +373,11 @@ class TiltStatus(IntEnum):
     MEASURE_STRAIGHT_EDGE = 307
     MEASURE_DUAL_OBJECTS = 308
     DATA_LOGGING = 309
+    # Python only (Tilt Methods Long Baseline Edge / Lattice, not in tilt_en.lang)
+    MEASURE_LONG_BASELINE_EDGE = 310
+    MEASURE_LATTICE = 311
+    MOVE_BASELINE = 312
+    WAIT_MOVE_BASELINE = 313
     EXITING = 400
     FINISHED = 500
     PAUSED = 600

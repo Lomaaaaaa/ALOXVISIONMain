@@ -20,7 +20,8 @@ codes 301…1499 through ``services.set_status("tilt", code)`` and publishes ``m
 
 **Parameters** (``alox_typedef_tilt_measurement_parameters``, :class:`TiltParams`; profile ``measure.tilt.*``,
 defaults of ``bundle d``): ``camera`` (1 = Low Mag.), ``startx``/``starty`` (0, wafer mm; the request's ``x``/``y``
-replace them, ``alox_api_v1_put_functions_measure_tilt``), ``method`` (0 Straight Edge, 1 Dual Objects),
+replace them, ``alox_api_v1_put_functions_measure_tilt``), ``method`` (0 Straight Edge, 1 Dual Objects; 2 Long
+Baseline Edge, 3 Lattice: Python only, below),
 ``maxmoves`` (0), ``step`` (0.1 mm); Straight Edge Detection: ``edgesearchdir`` (0 Left to Right), ``edgepolarity``
 (0 all), ``edgestrength`` (20), ``edgestep`` (30 px), ``edgewidth`` (10), ``edgekernel`` (3), ``minpointspc`` (25 %),
 ``expectedangledeg`` (0), ``anglerangedeg`` (10), ``edgemethod`` (0 First Edge Rake); Dual Objects Detection:
@@ -118,6 +119,46 @@ Job Finished`` command (the core's runner callback), the simulation variant (§3
 instead). ``IMAQ Find Straight Edges 3`` and the geometric matching are the stand-ins of :mod:`alox.vision.tilt` and
 :mod:`alox.vision.matching`: the angles agree on clean edges and marks (tests), but NI's scores, sub-pixel models
 and outlier rules are not reproduced, so ``Min. Points`` and ``Min Score`` tuned on NI may need adjusting.
+
+**Long-baseline methods** (Python only, owner's answer R22–R24 "build a better method"; a recipe selects them with
+``method`` 2 or 3, the default stays Straight Edge). The LabVIEW methods measure inside one field of view, against the
+camera's pixel axes; these measure a feature at stage positions up to L apart, against the **stage** axes that the
+mesa job's Tilt Correction moves (precision table and algorithms: :mod:`alox.vision.tilt`, "Precise methods"):
+
+- **Long Baseline Edge** (2): at the search position (the snail, autofocus and refocus as above) ``Measure Tilt
+  (Long Baseline Edge)`` (status 310): the wafer flat in the image, sub-pixel edge points and a robust line fit
+  (:func:`alox.vision.tilt.fit_edge_line`, with the Straight Edge Detection's Minimum Edge Strength and Polarity);
+  its point nearest the image centre and its direction, converted to wafer mm as the objects are (``Get Position
+  XY`` + ``tools_tracking_move_relative``: calibration, flips, stage coordinate system; Stages → Wafer). Then the
+  baseline positions −s, +s with s = L/2 (or ``First Step``, then growing): ``Move To Baseline Pos`` (312; the stage
+  to the edge point predicted on the line through the points measured so far, so that the edge is at the image
+  centre; moves retried as ``Move To Pos``: 1301), ``Baseline Position OK?`` (313; ±0.001 mm, settling, 30 s →
+  9530 / 1302), ``Measure Baseline Point`` (310; optional LL refocus, ``Long Baseline Refocus``: 1304; the edge
+  point nearest the centre; an edge whose angle differs from the start image's by more than the consistency
+  tolerance is another edge: lost). Angle = the line through the points (three with ``First Step`` 0;
+  ``atan2(Δy, Δx)`` in wafer mm, folded into ``Angle Expected ± 90°``).
+- **Lattice** (3): no model: ``Measure Tilt (Lattice)`` (311): the mesas of the Low Mag image
+  (:func:`alox.vision.tilt.detect_mesas`), the grid's row direction and pitches (:func:`alox.vision.tilt.
+  fit_lattice`, folded to ``Angle Expected ± 45°``), the mesa nearest the image centre as the start. The walk visits
+  ±s₁, ±s₂, … (s₁ = ``First Step`` or :attr:`TiltOptions.lattice_first_pitches` pitches; each offset a whole number
+  of pitches, so that a mesa is at the centre); at each position the mesa of the start row nearest the prediction
+  (:func:`alox.vision.tilt.pick_row_mesa`; farther than ¼ of the row spacing off the predicted row: lost, the row
+  cannot be told apart); the next half-baseline is at most ``Growth`` × the previous and only as long as the current
+  uncertainty keeps the predicted row within that ¼ spacing at 4σ (:func:`alox.vision.tilt.next_baseline_step`),
+  until L/2. The row direction must be known to better than (¼ spacing)/s₁ (10 pitches: ±1.4°) from the one image.
+- Both: the angle's uncertainty (1σ: the detection errors and :attr:`TiltOptions.stage_repeatability_um` over the
+  baseline, or the residuals when larger) in :attr:`TiltReport.uncertainty_deg`, the points in
+  :attr:`TiltReport.baseline`; **valid** when the one-image angle (edge: the mean of the images; lattice: the start
+  image) agrees with the baseline angle within ``Consistency`` (it differs by the camera's rotation) and the angle
+  lies within ``Angle Expected ± Angle Range``; ``measure_tilt``, images, data file and ``Finished`` as the other
+  methods; the overlay ``TILT ANGLE: %.3f° ± %.3f°``. A whole walk out of range → status 1499, error 9535 (as both
+  objects); inconsistent (``TILT INCONSISTENT``), or the feature lost → the next search position (snail), then 9086.
+  The stage is left at the last baseline position.
+- Recipe keys (:class:`LongBaselineDetection`): ``lblength`` (L, 20 mm), ``lbfirststep`` (0 mm = automatic),
+  ``lbgrowth`` (8), ``lbtolerancedeg`` (consistency, 0.5°), ``lbrefocus`` (F), ``latticepitchum`` (0 µm = measured);
+  shared with Straight Edge Detection: ``expectedangledeg``, ``anglerangedeg``, ``edgestrength``, ``edgepolarity``
+  (and ``edgesearchdir`` for the polarity's sense). Server settings in :class:`TiltOptions` (``lb_*``,
+  ``stage_repeatability_um``, ``lattice_*``). Statuses 310…313 are not in ``tilt_en.lang``.
 """
 
 from __future__ import annotations
@@ -185,12 +226,23 @@ from alox.vision.matching import (
     TemplateError,
 )
 from alox.vision.tilt import (
+    BaselineFit,
+    EdgeLineFit,
     EdgeMethod,
+    LatticeFit,
     LineOptions,
     RakeDirection,
     StraightEdgeTiltReport,
+    baseline_target,
+    detect_mesas,
+    fit_baseline,
+    fit_edge_line,
+    fit_lattice,
+    fold_angle,
     mask_matched_object,
     measure_tilt_straight_edge,
+    next_baseline_step,
+    pick_row_mesa,
 )
 from alox.vision.wafer import tilt_from_objects
 from aloxcam.errors import AloxError, FocusError
@@ -201,7 +253,9 @@ __all__ = [
     "TILT_NOT_FOUND",
     "TILT_OUT_OF_RANGE",
     "TILT_XY_TIMEOUT",
+    "BaselineReport",
     "DualObjectsDetection",
+    "LongBaselineDetection",
     "StraightEdgeDetection",
     "TiltError",
     "TiltFailed",
@@ -242,6 +296,11 @@ class TiltState(StrEnum):
     REFOCUS_FINISHED = "Refocus Finished"
     MEASURE_STRAIGHT_EDGE = "Measure Tilt (Straight Edge)"
     MEASURE_OBJECTS = "Measure Tilt (Objects)"
+    MEASURE_LONG_BASELINE = "Measure Tilt (Long Baseline Edge)"        # Python only (not in the typedef)
+    MEASURE_LATTICE = "Measure Tilt (Lattice)"                         # Python only
+    BASELINE_MOVE = "Move To Baseline Pos"                             # Python only
+    BASELINE_POSITION_OK = "Baseline Position OK?"                     # Python only
+    BASELINE_MEASURE = "Measure Baseline Point"                        # Python only
     NOTIFY_CLIENT = "Notify Client"
     DISPLAY_SAVE = "Display & Save"
     FINISHED = "Finished"
@@ -250,16 +309,19 @@ class TiltState(StrEnum):
 
 
 class TiltMethod(IntEnum):
-    """``Tilt Method``."""
+    """``Tilt Method``: 0 and 1 as LabVIEW; 2 and 3 Python only (module docstring, "Long-baseline methods")."""
 
     STRAIGHT_EDGE = 0
     DUAL_OBJECTS = 1
+    LONG_BASELINE_EDGE = 2
+    LATTICE = 3
 
     @classmethod
     def coerce(cls, value: Any) -> TiltMethod:
         if isinstance(value, str) and not value.strip().lstrip("-").isdigit():
             key = value.strip().lower().replace(" ", "").replace("_", "")
-            for member, label in ((cls.STRAIGHT_EDGE, "straightedge"), (cls.DUAL_OBJECTS, "dualobjects")):
+            for member, label in ((cls.STRAIGHT_EDGE, "straightedge"), (cls.DUAL_OBJECTS, "dualobjects"),
+                                  (cls.LONG_BASELINE_EDGE, "longbaselineedge"), (cls.LATTICE, "lattice")):
                 if key == label:
                     return member
             raise TiltError(INVALID_ARGUMENTS, f"Tilt Method: unknown value {value!r}")
@@ -381,6 +443,31 @@ class DualObjectsDetection:
                              curve=self.curve())
 
 
+@dataclass(frozen=True)
+class LongBaselineDetection:
+    """``Long Baseline`` settings of the Python-only Tilt Methods 2 and 3 (profile ``measure.tilt.lb*`` and
+    ``latticepitchum``; module docstring): the total baseline L (mm), the first half-baseline (mm; 0: L/2 for the
+    edge, :attr:`TiltOptions.lattice_first_pitches` pitches for the lattice), the largest ratio between two
+    successive half-baselines, the largest difference (°) between the angle seen in the images and the baseline
+    angle, a refocus at every baseline position, the mesa pitch along a row (µm; 0: measured in the image)."""
+
+    length_mm: float = 20.0
+    first_step_mm: float = 0.0
+    growth: float = 8.0
+    consistency_deg: float = 0.5
+    refocus: bool = False
+    lattice_pitch_um: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name in ("length_mm", "first_step_mm", "growth", "consistency_deg", "lattice_pitch_um"):
+            _set(self, name, number(getattr(self, name), name))
+        _set(self, "refocus", flag(self.refocus))
+        if (self.length_mm <= 0 or self.first_step_mm < 0 or self.growth <= 1 or self.consistency_deg <= 0
+                or self.lattice_pitch_um < 0):
+            raise TiltError(INVALID_ARGUMENTS, "Long Baseline: Length > 0, First Step >= 0, Growth > 1, Consistency "
+                                               f"> 0 and Pitch >= 0 expected, got {self!r}")
+
+
 #: field → (profile key, default) of ``bundle d``.
 _TOP_KEYS: dict[str, tuple[str, Any]] = {
     "camera_type": ("camera", 1), "method": ("method", 0), "max_moves": ("maxmoves", 0), "step_mm": ("step", 0.1),
@@ -399,6 +486,10 @@ _OBJECT_KEYS: dict[str, tuple[str, Any]] = {
     "morph_open": ("morphopen", 0), "morph_close": ("morphclose", 0), "obj1_min_score": ("obj1minscore", 70.0),
     "obj1_max_occlusion": ("obj1maxocclusionpc", 40.0), "obj2_min_score": ("obj2minscore", 70.0),
     "obj2_max_occlusion": ("obj2maxocclusionpc", 40.0)}
+_BASELINE_KEYS: dict[str, tuple[str, Any]] = {
+    "length_mm": ("lblength", 20.0), "first_step_mm": ("lbfirststep", 0.0), "growth": ("lbgrowth", 8.0),
+    "consistency_deg": ("lbtolerancedeg", 0.5), "refocus": ("lbrefocus", False),
+    "lattice_pitch_um": ("latticepitchum", 0.0)}
 
 
 @dataclass(frozen=True)
@@ -412,6 +503,7 @@ class TiltParams:
     step_mm: float = 0.1
     straight_edge: StraightEdgeDetection = field(default_factory=StraightEdgeDetection)
     dual_objects: DualObjectsDetection = field(default_factory=DualObjectsDetection)
+    long_baseline: LongBaselineDetection = field(default_factory=LongBaselineDetection)
     autofocus: bool = True
     refocus: bool = True
     show_window: bool = True
@@ -439,21 +531,24 @@ class TiltParams:
             _set(self, "straight_edge", StraightEdgeDetection(**dict(self.straight_edge)))
         if not isinstance(self.dual_objects, DualObjectsDetection):
             _set(self, "dual_objects", DualObjectsDetection(**dict(self.dual_objects)))
+        if not isinstance(self.long_baseline, LongBaselineDetection):
+            _set(self, "long_baseline", LongBaselineDetection(**dict(self.long_baseline)))
 
     @classmethod
     def from_profile(cls, profile: Any, **overrides: Any) -> TiltParams:
         """The ``measure.tilt.*`` keys of the active profile with the bundle VI's defaults; ``overrides`` (field
-        names; ``straight_edge`` / ``dual_objects`` may be mappings of their fields, merged) win."""
+        names; ``straight_edge`` / ``dual_objects`` / ``long_baseline`` may be mappings of their fields, merged)
+        win."""
         def read(keys: Mapping[str, tuple[str, Any]]) -> dict[str, Any]:
             return {name: _profile_get(profile, f"measure.tilt.{key}", default) for name, (key, default) in keys.items()}
         values = read(_TOP_KEYS)
         values["start_pos"] = (_profile_get(profile, "measure.tilt.startx", 0.0),
                                _profile_get(profile, "measure.tilt.starty", 0.0))
-        edge, objects = read(_EDGE_KEYS), read(_OBJECT_KEYS)
+        edge, objects, baseline = read(_EDGE_KEYS), read(_OBJECT_KEYS), read(_BASELINE_KEYS)
         extra = dict(overrides)
-        for name, base in (("straight_edge", edge), ("dual_objects", objects)):
+        for name, base in (("straight_edge", edge), ("dual_objects", objects), ("long_baseline", baseline)):
             given = extra.pop(name, None)
-            if isinstance(given, (StraightEdgeDetection, DualObjectsDetection)):
+            if isinstance(given, (StraightEdgeDetection, DualObjectsDetection, LongBaselineDetection)):
                 values[name] = given
             else:
                 base.update(dict(given or {}))
@@ -478,6 +573,15 @@ class TiltOptions:
     x_stage_invert: bool = False             # debug globals of tools_tracking_move_relative (OFF for AET)
     y_stage_invert: bool = False
     data_format: str = "%.3f"                # Write To Spreadsheet File default format
+    # Python-only Tilt Methods 2 and 3 (module docstring, "Long-baseline methods")
+    lb_profile_step_px: int = 4              # Long Baseline Edge: one edge point every n pixels along the edge
+    lb_profile_width_px: int = 5             # … each profile averaged over n parallel lines
+    lb_smoothing_px: float = 1.5             # σ of the derivative-of-Gaussian across the edge
+    lb_fit_max_distance_px: float = 1.5      # line fit: inlier distance
+    stage_repeatability_um: float = 0.5      # 1σ of a stage position: part of the uncertainty and of the walk steps
+    lattice_first_pitches: int = 10          # Lattice: first half-baseline (pitches) when lbfirststep is 0
+    lattice_row_tolerance: float = 0.25      # a mesa farther than this × the row spacing off the predicted row: lost
+    lattice_min_mesas: int = 6               # mesas needed in the start image
 
 
 # ================================================================================================== results
@@ -485,11 +589,34 @@ Point = tuple[float, float]
 
 
 @dataclass(frozen=True)
+class BaselineReport:
+    """A long-baseline measurement (Tilt Methods 2 and 3): the feature's points (wafer mm: the edge point nearest the
+    image centre, or the mesa of the start row) in the order measured, their offsets along the line (mm) and the stage
+    positions (mm) of their images; the line fit (``fit``: angle, uncertainty, length); the angle of the feature seen
+    in the images (wafer frame: the mean of the edge fits, or the lattice of the start image) and the checks;
+    ``start_fit`` the fit of the start image (pixels)."""
+
+    method: TiltMethod
+    points_mm: tuple[Point, ...]
+    offsets_mm: tuple[float, ...]
+    stage_mm: tuple[Point, ...]
+    fit: BaselineFit | None
+    image_angle_deg: float
+    image_angles_deg: tuple[float, ...]
+    complete: bool
+    consistent: bool
+    in_range: bool
+    message: str
+    start_fit: EdgeLineFit | LatticeFit | None = None
+
+
+@dataclass(frozen=True)
 class TiltReport:
     """``alox_typedef_tilt_measurement_report``: the straight-edge report, the best matches (pixels and wafer mm) and
     the index of the position where each object was found (``Current Pos Index``: 1 = the start position), ``Tilt
     Angle (°)`` (NaN until measured) and its validity, the process times (ms), the SEMI job; plus the search positions
-    (XY stage mm), the files written and the tilt status at the end."""
+    (XY stage mm), the files written and the tilt status at the end; for the long-baseline methods the uncertainty
+    (1σ, °) and the :class:`BaselineReport`."""
 
     job: JobInfo
     method: TiltMethod
@@ -515,6 +642,8 @@ class TiltReport:
     images: tuple[Path, ...] = ()
     data_file: Path | None = None
     status: int = 0
+    uncertainty_deg: float = math.nan            # 1σ (Tilt Methods 2 and 3)
+    baseline: BaselineReport | None = None       # Tilt Methods 2 and 3
 
     def as_dict(self) -> dict[str, Any]:
         return {f.name: getattr(self, f.name) for f in fields(self)}
@@ -609,6 +738,42 @@ class TiltMeasurement(MeasurementFunction):
         return report
 
 
+@dataclass
+class _Walk:
+    """The state of a long-baseline walk (Tilt Methods 2 and 3), wafer mm: the feature at the start position and the
+    direction along it (unit) from the start image; the half-baselines ±s₁, ±s₂, … still to visit; the points."""
+
+    lattice: bool
+    start: Point
+    direction: Point
+    half: float
+    drift_limit: float
+    step: float
+    image_angle: float
+    start_fit: EdgeLineFit | LatticeFit
+    sigma_point: float = 0.0
+    pitch_along: float = math.nan
+    pitch_across: float = math.nan
+    horizontal: bool | None = None
+    pending: list[float] = field(default_factory=list)
+    target: Point = (math.nan, math.nan)
+    target_stage: Point = (math.nan, math.nan)
+    offset: float = 0.0
+    points: list[Point] = field(default_factory=list)
+    sigmas: list[float] = field(default_factory=list)
+    offsets: list[float] = field(default_factory=list)
+    stage: list[Point] = field(default_factory=list)
+    image_angles: list[float] = field(default_factory=list)
+
+    def add(self, point: Point, sigma: float, offset: float, stage: Point, image_angle: float | None = None) -> None:
+        self.points.append(point)
+        self.sigmas.append(sigma)
+        self.offsets.append(offset)
+        self.stage.append(stage)
+        if image_angle is not None:
+            self.image_angles.append(image_angle)
+
+
 class _TiltJob:
     """One run: the session (``Tilt Session``) and the states."""
 
@@ -645,6 +810,10 @@ class _TiltJob:
         self.folders: jobfiles.JobFolders | None = None
         self.images: list[Path] = []
         self.data_file: Path | None = None
+        self.walk: _Walk | None = None                              # Tilt Methods 2 and 3
+        self.walk_shapes: list[Shape] = []                          # the overlay of the last baseline image
+        self.baseline: BaselineReport | None = None
+        self.uncertainty = math.nan
 
     # ---------------------------------------------------------------------------------------------- loop
     def report(self) -> TiltReport:
@@ -657,7 +826,8 @@ class _TiltJob:
             object2_index=self.found_index[2], match1=self.match[1], match2=self.match[2],
             search_positions=tuple(self.positions), current_index=self.index, current_xy=self.current,
             edges_process_time_ms=self.edges_ms, match_process_time_ms=self.match_ms,
-            process_time_ms=self.process_ms, images=tuple(self.images), data_file=self.data_file, status=self.code)
+            process_time_ms=self.process_ms, images=tuple(self.images), data_file=self.data_file, status=self.code,
+            uncertainty_deg=self.uncertainty, baseline=self.baseline)
 
     def execute(self) -> TiltReport:
         handlers: dict[TiltState, Callable[[], TiltState]] = {
@@ -667,7 +837,10 @@ class _TiltJob:
             TiltState.REFOCUS_INIT: lambda: TiltState.REFOCUS, TiltState.REFOCUS: self.refocus,
             TiltState.REFOCUS_FINISHED: self.measure_state, TiltState.MEASURE_STRAIGHT_EDGE: self.measure_straight_edge,
             TiltState.MEASURE_OBJECTS: self.measure_objects, TiltState.NOTIFY_CLIENT: lambda: TiltState.DISPLAY_SAVE,
-            TiltState.DISPLAY_SAVE: self.display_save}
+            TiltState.DISPLAY_SAVE: self.display_save, TiltState.MEASURE_LONG_BASELINE: self.measure_long_baseline,
+            TiltState.MEASURE_LATTICE: self.measure_lattice, TiltState.BASELINE_MOVE: self.baseline_move,
+            TiltState.BASELINE_POSITION_OK: self.baseline_position_ok,
+            TiltState.BASELINE_MEASURE: self.baseline_measure}
         self.prepare()
         self.publish(TiltState.START)
         try:
@@ -865,8 +1038,10 @@ class _TiltJob:
         return TiltState.POSITION_OK
 
     def measure_state(self) -> TiltState:
-        return (TiltState.MEASURE_STRAIGHT_EDGE if self.p.method is TiltMethod.STRAIGHT_EDGE
-                else TiltState.MEASURE_OBJECTS)
+        return {TiltMethod.STRAIGHT_EDGE: TiltState.MEASURE_STRAIGHT_EDGE,
+                TiltMethod.DUAL_OBJECTS: TiltState.MEASURE_OBJECTS,
+                TiltMethod.LONG_BASELINE_EDGE: TiltState.MEASURE_LONG_BASELINE,
+                TiltMethod.LATTICE: TiltState.MEASURE_LATTICE}[self.p.method]
 
     # ---------------------------------------------------------------------------------------------- focus
     def autofocus(self) -> TiltState:
@@ -1022,6 +1197,335 @@ class _TiltJob:
                    object2_found=self.found[2])
         return TiltState.NOTIFY_CLIENT
 
+    # ---------------------------------------------------------------------------------------------- long baseline
+    def pixel_map(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """The affine map pixel → wafer mm of an image taken at :attr:`current` (the calibration, flips and stage
+        coordinate system of :meth:`object_mm`): ``wafer = A @ (x, y) + b``, returned as ``(A, b)``."""
+        height, width = image.shape[:2]
+        system = int(stage_coordinate_system(self.s))
+        origin = self.origin()
+
+        def wafer(px: Point) -> np.ndarray:
+            stage = object_position(self.s, self.current, px, (width, height), camera=self.camera,
+                                    x_stage_invert=self.o.x_stage_invert, y_stage_invert=self.o.y_stage_invert)
+            return np.asarray(stage_to_wafer(stage[0], stage[1], origin, system), dtype=np.float64)
+        b = wafer((0.0, 0.0))
+        a = np.column_stack(((wafer((100.0, 0.0)) - b) / 100.0, (wafer((0.0, 100.0)) - b) / 100.0))
+        return a, b
+
+    @staticmethod
+    def wafer_point(m: tuple[np.ndarray, np.ndarray], px: Sequence[float]) -> Point:
+        w = m[0] @ np.asarray(px, dtype=np.float64) + m[1]
+        return float(w[0]), float(w[1])
+
+    @staticmethod
+    def wafer_direction(m: tuple[np.ndarray, np.ndarray], d: Sequence[float]) -> Point:
+        w = m[0] @ np.asarray(d, dtype=np.float64)
+        n = math.hypot(float(w[0]), float(w[1]))
+        return float(w[0]) / n, float(w[1]) / n
+
+    @staticmethod
+    def mm_per_px(m: tuple[np.ndarray, np.ndarray]) -> float:
+        return math.sqrt(abs(float(np.linalg.det(m[0]))))
+
+    def reset_baseline(self) -> None:
+        self.walk, self.baseline, self.walk_shapes = None, None, []
+        self.angle, self.valid, self.uncertainty, self.process_ms = math.nan, False, math.nan, 0.0
+
+    def edge_fit(self, image: np.ndarray, horizontal: bool | None = None) -> EdgeLineFit | None:
+        """:func:`alox.vision.tilt.fit_edge_line` with the Straight Edge Detection's strength and polarity (the
+        profiles run top → bottom or left → right: the polarity is swapped for the Right to Left and Bottom to Top
+        search directions) and the server's profile settings."""
+        se = self.p.straight_edge
+        polarity = se.edge_polarity
+        if se.search_direction in (RakeDirection.RIGHT_TO_LEFT, RakeDirection.BOTTOM_TO_TOP):
+            polarity = {EdgePolarity.RISING: EdgePolarity.FALLING,
+                        EdgePolarity.FALLING: EdgePolarity.RISING}.get(polarity, polarity)
+        return fit_edge_line(image, horizontal=horizontal, step_px=self.o.lb_profile_step_px,
+                             width_px=self.o.lb_profile_width_px, smoothing_px=self.o.lb_smoothing_px,
+                             min_strength=se.min_edge_strength, polarity=polarity,
+                             max_distance_px=self.o.lb_fit_max_distance_px)
+
+    def edge_shapes(self, image: np.ndarray, fit: EdgeLineFit) -> list[Shape]:
+        """The fitted edge (red) and its points (yellow) with ``Overlay Straight Edge``; the centre point (red)."""
+        if not self.p.overlay_straight_edge:
+            return []
+        height, width = image.shape[:2]
+        line = fit.line
+        if fit.horizontal:
+            ends = ((0.0, float(line.y_at(0.0))), (width - 1.0, float(line.y_at(width - 1.0))))
+        else:
+            ends = ((float(line.x_at(0.0)), 0.0), (float(line.x_at(height - 1.0)), height - 1.0))
+        return [Line(ends[0][0], ends[0][1], ends[1][0], ends[1][1], RED, 2),
+                Points(tuple(map(tuple, fit.points)), YELLOW, 1, marker=5), Points((fit.centre_point,), RED, 2, marker=3)]
+
+    def lattice_shapes(self, centres: np.ndarray, chosen: Sequence[float] | None) -> list[Shape]:
+        """The mesa centres (orange) with ``Overlay Edges``, the mesa of the row (red) with ``Overlay Line``."""
+        shapes: list[Shape] = []
+        if self.p.overlay_edges and len(centres):
+            shapes.append(Points(tuple(map(tuple, centres)), ORANGE, 1, marker=3))
+        if self.p.overlay_straight_edge and chosen is not None:
+            shapes.append(Points(((float(chosen[0]), float(chosen[1])),), RED, 2, marker=5))
+        return shapes
+
+    def start_walk(self, walk: _Walk, sigma: float, shapes: list[Shape]) -> TiltState:
+        walk.add(walk.start, sigma, 0.0, self.current, walk.image_angle if not walk.lattice else None)
+        walk.pending = [-walk.step, walk.step]
+        self.walk, self.walk_shapes = walk, shapes
+        self.overlay(shapes)
+        return TiltState.BASELINE_MOVE
+
+    def measure_long_baseline(self) -> TiltState:
+        """"Measure Tilt (Long Baseline Edge)" at the search position: the edge of the start image, the point nearest
+        the image centre and the direction of the walk (module docstring)."""
+        self.set_status(TiltStatus.MEASURE_LONG_BASELINE_EDGE)     # 310
+        self.reset_baseline()
+        t0 = self.s.clock()
+        lb, se = self.p.long_baseline, self.p.straight_edge
+        try:
+            image = self.image()
+            fit = self.edge_fit(image)
+            if fit is None:
+                return self.walk_lost("no straight edge in the start image", t0)
+            m = self.pixel_map(image)
+            direction = self.wafer_direction(m, fit.line.direction)
+            px_mm = self.mm_per_px(m)
+            height, width = image.shape[:2]
+            half = lb.length_mm / 2.0
+            walk = _Walk(lattice=False, start=self.wafer_point(m, fit.centre_point), direction=direction, half=half,
+                         drift_limit=0.25 * (height if fit.horizontal else width) * px_mm,
+                         step=min(half, lb.first_step_mm or half), start_fit=fit, horizontal=fit.horizontal,
+                         image_angle=fold_angle(math.degrees(math.atan2(direction[1], direction[0])), 180.0,
+                                                se.angle_expected_deg))
+        except Stopped:
+            raise
+        except Exception as exc:                                  # noqa: BLE001 - logged, the tilt stays invalid
+            app_log(self.s, "error", f"Tilt (Measure Long Baseline Edge): {exc}")
+            return self.walk_lost(f"processing error: {exc}", t0)
+        self.process_ms = self.edges_ms = (self.s.clock() - t0) * 1000.0
+        return self.start_walk(walk, fit.centre_sigma_px * px_mm, self.edge_shapes(image, fit))
+
+    def measure_lattice(self) -> TiltState:
+        """"Measure Tilt (Lattice)" at the search position: the mesa grid of the start image, the mesa nearest the
+        image centre and the row direction of the walk (module docstring)."""
+        self.set_status(TiltStatus.MEASURE_LATTICE)                # 311
+        self.reset_baseline()
+        t0 = self.s.clock()
+        lb, se = self.p.long_baseline, self.p.straight_edge
+        try:
+            image = self.image()
+            height, width = image.shape[:2]
+            centres = detect_mesas(image)
+            fit = fit_lattice(centres, reference=(width / 2.0, height / 2.0), min_nodes=self.o.lattice_min_mesas)
+            if fit is None:
+                self.walk_shapes = self.lattice_shapes(centres, None)
+                return self.walk_lost(f"no mesa grid in the start image ({len(centres)} mesas)", t0)
+            m = self.pixel_map(image)
+            ref = fit.centres[int(np.argmin(np.hypot(fit.centres[:, 0] - width / 2.0,
+                                                     fit.centres[:, 1] - height / 2.0)))]
+            direction = self.wafer_direction(m, fit.row)
+            px_mm = self.mm_per_px(m)
+            pitch = lb.lattice_pitch_um / 1000.0 if lb.lattice_pitch_um > 0 else fit.pitch_row_px * px_mm
+            across = fit.pitch_across_px * px_mm
+            half = lb.length_mm / 2.0
+            first = lb.first_step_mm or self.o.lattice_first_pitches * pitch
+            walk = _Walk(lattice=True, start=self.wafer_point(m, ref), direction=direction, half=half,
+                         drift_limit=self.o.lattice_row_tolerance * across, step=min(half, first), start_fit=fit,
+                         sigma_point=fit.rms_px * px_mm, pitch_along=pitch, pitch_across=across,
+                         image_angle=fold_angle(math.degrees(math.atan2(direction[1], direction[0])), 90.0,
+                                                se.angle_expected_deg))
+        except Stopped:
+            raise
+        except Exception as exc:                                  # noqa: BLE001 - logged, the tilt stays invalid
+            app_log(self.s, "error", f"Tilt (Measure Lattice): {exc}")
+            return self.walk_lost(f"processing error: {exc}", t0)
+        self.process_ms = self.edges_ms = (self.s.clock() - t0) * 1000.0
+        return self.start_walk(walk, walk.sigma_point, self.lattice_shapes(centres, ref))
+
+    def walk_line(self) -> tuple[Point, Point]:
+        """A point of the line predicted through the points measured so far and its unit direction."""
+        w = self.walk
+        assert w is not None
+        p = baseline_target(w.points, w.start, w.direction, 0.0)
+        q = baseline_target(w.points, w.start, w.direction, 1.0)
+        return p, (q[0] - p[0], q[1] - p[1])
+
+    def baseline_move(self) -> TiltState:
+        """"Move To Baseline Pos": the stage to the feature predicted at the next offset (the lattice: a whole number
+        of pitches, so that a mesa is at the image centre); moves retried as ``Move To Pos``."""
+        self.set_status(TiltStatus.MOVE_BASELINE)                  # 312
+        w = self.walk
+        assert w is not None
+        offset = w.pending[0]
+        if w.lattice:
+            offset = math.copysign(max(1, round(abs(offset) / w.pitch_along)) * w.pitch_along, offset)
+        w.offset = offset
+        w.target = baseline_target(w.points, w.start, w.direction, offset)
+        w.target_stage = wafer_to_stage(w.target, self.origin(), int(stage_coordinate_system(self.s)))
+        try:
+            self.xy.move_absolute(w.target_stage[0], w.target_stage[1], wait=False)
+        except (DeviceError, AloxError) as exc:
+            self.move_t = self.s.clock()
+            if self.error_count >= self.o.move_retries:
+                return self.fail(exc, TiltState.BASELINE_MOVE, "Tilt (Move XY)", TiltStatus.ERROR_MOVE)
+            self.error_count += 1
+            log.warning("tilt: move to %s failed (%d): %s", w.target_stage, self.error_count, exc)
+            return TiltState.BASELINE_MOVE
+        self.error_count = 0
+        self.move_t = self.s.clock()
+        self.event("TILT Moving", target=w.target_stage, baseline_offset=offset)
+        return TiltState.BASELINE_POSITION_OK
+
+    def baseline_position_ok(self) -> TiltState:
+        """"Baseline Position OK?": the rules of ``Position OK?`` (tolerance, settling, timeout 9530)."""
+        self.set_status(TiltStatus.WAIT_MOVE_BASELINE)             # 313
+        w = self.walk
+        assert w is not None
+        pos = self.read_position()
+        tol = self.o.position_tolerance_mm
+        if pos is not None and all(t - tol <= v <= t + tol for v, t in zip(pos, w.target_stage, strict=True)):
+            self.pause(self.o.settle_s)
+            self.current = pos
+            self.event("TILT Moving", reached=True, baseline_offset=w.offset)
+            return TiltState.BASELINE_MEASURE
+        if self.s.clock() - self.move_t > self.o.move_timeout_s:
+            exc = TiltError(TILT_XY_TIMEOUT, "tilt error (xy stages timeout)")
+            return self.fail(exc, TiltState.BASELINE_POSITION_OK, "Tilt (Baseline Position OK?)",
+                             TiltStatus.ERROR_WAIT_MOVE)
+        self.pause(self.o.poll_s)
+        return TiltState.BASELINE_POSITION_OK
+
+    def baseline_measure(self) -> TiltState:
+        """"Measure Baseline Point": optional refocus, then the feature at this baseline position; next the following
+        offset, a longer half-baseline (:func:`alox.vision.tilt.next_baseline_step`), or the angle."""
+        w = self.walk
+        assert w is not None
+        self.set_status(TiltStatus.MEASURE_LATTICE if w.lattice else TiltStatus.MEASURE_LONG_BASELINE_EDGE)
+        if self.p.long_baseline.refocus:
+            try:
+                self.image()
+                self.ctx.run_once(FunctionName.REFOCUS, self.f.refocus_params(self.s, self.p.camera_type))
+            except Stopped:
+                raise
+            except Exception as exc:                              # noqa: BLE001 - the LL function's error cluster
+                return self.fail(exc, TiltState.BASELINE_MEASURE, "Tilt (Refocus)", TiltStatus.ERROR_REFOCUS)
+        t0 = self.s.clock()
+        try:
+            image = self.image()
+            lost = self.lattice_point(image) if w.lattice else self.edge_point(image)
+        except Stopped:
+            raise
+        except Exception as exc:                                  # noqa: BLE001 - logged, the tilt stays invalid
+            app_log(self.s, "error", f"Tilt (Measure Baseline Point): {exc}")
+            lost = f"processing error: {exc}"
+        if lost:
+            return self.walk_lost(f"{lost} at {w.offset:+.3f} mm", t0)
+        self.process_ms += (self.s.clock() - t0) * 1000.0
+        w.pending.pop(0)
+        if w.pending:
+            return TiltState.BASELINE_MOVE
+        if w.step >= w.half:
+            return self.walk_finished()
+        fit = fit_baseline(w.points, w.sigmas, extra_sigma=self.o.stage_repeatability_um / 1000.0)
+        w.step = next_baseline_step(w.step, w.half, sigma_deg=fit.sigma_deg, drift_limit=w.drift_limit,
+                                    growth=self.p.long_baseline.growth)
+        w.pending = [-w.step, w.step]
+        return TiltState.BASELINE_MOVE
+
+    def edge_point(self, image: np.ndarray) -> str:
+        """The edge at a baseline position: its point nearest the image centre; "" or why it is lost (no edge, or an
+        edge whose angle differs from the start image's by more than the consistency tolerance: another edge)."""
+        w = self.walk
+        assert w is not None
+        fit = self.edge_fit(image, w.horizontal)
+        if fit is None:
+            return "edge lost"
+        m = self.pixel_map(image)
+        d = self.wafer_direction(m, fit.line.direction)
+        angle = fold_angle(math.degrees(math.atan2(d[1], d[0])), 180.0, w.image_angle)
+        self.walk_shapes = self.edge_shapes(image, fit)
+        self.overlay(self.walk_shapes)
+        if abs(angle - w.image_angle) > self.p.long_baseline.consistency_deg:
+            return f"another edge ({angle:.3f}° against {w.image_angle:.3f}°)"
+        w.add(self.wafer_point(m, fit.centre_point), fit.centre_sigma_px * self.mm_per_px(m), w.offset, self.current,
+              angle)
+        return ""
+
+    def lattice_point(self, image: np.ndarray) -> str:
+        """The mesa of the start row at a baseline position (:func:`alox.vision.tilt.pick_row_mesa`); "" or why it is
+        lost (no mesa, or none on the predicted row within the row tolerance)."""
+        w = self.walk
+        assert w is not None
+        centres = detect_mesas(image)
+        self.walk_shapes = []
+        if not len(centres):
+            return "no mesa"
+        m = self.pixel_map(image)
+        wafer = centres @ m[0].T + m[1]
+        point, direction = self.walk_line()
+        got = pick_row_mesa(wafer, w.target, direction, pitch_along=w.pitch_along, pitch_across=w.pitch_across,
+                            line_point=point, tolerance=self.o.lattice_row_tolerance)
+        self.walk_shapes = self.lattice_shapes(centres, centres[got[0]] if got else None)
+        self.overlay(self.walk_shapes)
+        if got is None:
+            return "no mesa on the predicted row"
+        w.add((float(wafer[got[0], 0]), float(wafer[got[0], 1])), w.sigma_point, w.offset, self.current)
+        return ""
+
+    def walk_finished(self) -> TiltState:
+        """The angle of the line through the points, its uncertainty (stage repeatability included), the
+        consistency with the images' angle and the range check (module docstring)."""
+        w = self.walk
+        assert w is not None
+        lb, se = self.p.long_baseline, self.p.straight_edge
+        period = 90.0 if w.lattice else 180.0
+        fit = fit_baseline(w.points, w.sigmas, extra_sigma=self.o.stage_repeatability_um / 1000.0, period=period,
+                           centre=se.angle_expected_deg)
+        if w.lattice:
+            image_angle = fold_angle(w.image_angle, period, fit.angle_deg)
+        else:                                                      # the mean direction modulo 180°
+            a = np.radians(np.asarray(w.image_angles)) * 2.0
+            image_angle = fold_angle(math.degrees(math.atan2(np.sin(a).sum(), np.cos(a).sum()) / 2.0), period,
+                                     fit.angle_deg)
+        consistent = abs(image_angle - fit.angle_deg) <= lb.consistency_deg
+        in_range = abs(fit.angle_deg - se.angle_expected_deg) <= se.angle_range_deg
+        self.angle, self.uncertainty, self.valid = fit.angle_deg, fit.sigma_deg, consistent and in_range
+        if self.valid:
+            message = f"TILT ANGLE: {fit.angle_deg:.3f}° ± {fit.sigma_deg:.3f}°"
+        else:
+            message = "TILT INCONSISTENT" if not consistent else "TILT NOT FOUND/INVALID"
+            app_log(self.s, "warning", f"Tilt (Baseline): {fit.angle_deg:.4f}° over {fit.length:.3f} mm, images "
+                                       f"{image_angle:.4f}°: {'out of range' if consistent else 'inconsistent'}")
+        self.baseline = self.baseline_report(fit, image_angle, True, consistent, in_range, message)
+        self.overlay(self.walk_shapes + (self.alarm(message, self.valid) if self.p.overlay_tilt else []))
+        self.event("TILT Measured", angle=self.angle, valid=self.valid, uncertainty=self.uncertainty,
+                   baseline_mm=fit.length, image_angle=image_angle)
+        return TiltState.NOTIFY_CLIENT
+
+    def walk_lost(self, reason: str, t0: float) -> TiltState:
+        """The feature was not found (start image) or lost (baseline position): no tilt at this search position."""
+        self.process_ms += (self.s.clock() - t0) * 1000.0
+        w = self.walk
+        fit = None
+        if w is not None and len(w.points) >= 2:
+            fit = fit_baseline(w.points, w.sigmas, period=90.0 if w.lattice else 180.0,
+                               centre=self.p.straight_edge.angle_expected_deg)
+        self.angle, self.valid, self.uncertainty = math.nan, False, math.nan
+        self.baseline = self.baseline_report(fit, math.nan, False, False, False, "TILT NOT FOUND/INVALID")
+        app_log(self.s, "warning", f"Tilt (Baseline): {reason}")
+        self.overlay(self.walk_shapes + (self.alarm("TILT NOT FOUND/INVALID", False) if self.p.overlay_tilt else []))
+        self.event("TILT Measured", angle=self.angle, valid=False, lost=reason)
+        return TiltState.NOTIFY_CLIENT
+
+    def baseline_report(self, fit: BaselineFit | None, image_angle: float, complete: bool, consistent: bool,
+                        in_range: bool, message: str) -> BaselineReport:
+        w = self.walk
+        return BaselineReport(
+            method=self.p.method, points_mm=tuple(w.points) if w else (), offsets_mm=tuple(w.offsets) if w else (),
+            stage_mm=tuple(w.stage) if w else (), fit=fit, image_angle_deg=image_angle,
+            image_angles_deg=tuple(w.image_angles) if w else (), complete=complete, consistent=consistent,
+            in_range=in_range, message=message, start_fit=w.start_fit if w else None)
+
     # ---------------------------------------------------------------------------------------------- Display & Save
     def display_save(self) -> TiltState:
         """"Tilt Measured, display and save results" (sm d104…d121)."""
@@ -1038,7 +1542,9 @@ class _TiltJob:
             self.save_data()
         if self.valid:
             return TiltState.FINISHED
-        if self.found[1] and self.found[2]:                        # both objects, angle out of range
+        b = self.baseline
+        out_of_range = b is not None and b.complete and b.consistent and not b.in_range
+        if (self.found[1] and self.found[2]) or out_of_range:     # both objects / a whole baseline, out of range
             exc = TiltError(TILT_OUT_OF_RANGE, f"tilt error (tilt angle out of range): {self.angle:.3f}°")
             return self.fail(exc, TiltState.DISPLAY_SAVE, None, TiltStatus.ERROR_TILT_NOT_FOUND)
         return TiltState.MOVE_TO_POS
@@ -1076,7 +1582,7 @@ class _TiltJob:
         """"Function finished sucessfully" (sm d124…d151)."""
         self.set_status(TiltStatus.EXITING)                        # 400 "Exit Tilt"
         self.event("TILT Finished", angle=self.angle, valid=self.valid)
-        both = self.p.method is TiltMethod.STRAIGHT_EDGE or (self.found[1] and self.found[2])
+        both = self.p.method is not TiltMethod.DUAL_OBJECTS or (self.found[1] and self.found[2])
         if not (self.valid and both):                              # unreachable as wired: Fixed (raise)
             self.set_status(TiltStatus.ERROR_TILT_NOT_FOUND)
             self.error = TiltError(TILT_ANGLE_NOT_FOUND, "tilt error (tilt angle not found)")

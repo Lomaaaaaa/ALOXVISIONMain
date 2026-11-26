@@ -32,6 +32,7 @@ from alox.functions.tilt import (
     TILT_OUT_OF_RANGE,
     TILT_XY_TIMEOUT,
     DualObjectsDetection,
+    LongBaselineDetection,
     StraightEdgeDetection,
     TiltError,
     TiltFailed,
@@ -559,3 +560,240 @@ def test_joysticks_off_and_speed(rig, monkeypatch):
     monkeypatch.setattr(r.xy, "set_speed", lambda v, *a, **k: speeds.append(v))
     run(r, edge_params())
     assert r.services.devices["z"].joystick == [False] and speeds == [10.0]
+
+
+# ============================================================================================== long-baseline methods
+def _camera_offsets(rotation_deg: float) -> tuple[np.ndarray, np.ndarray]:
+    """Stage offsets (mm, X right, Y up) of every pixel from the image centre, for a camera turned by
+    ``rotation_deg`` against the stage axes (an uncalibrated mounting error the one-image methods measure)."""
+    ys, xs = np.mgrid[0:H, 0:W].astype(np.float64)
+    ox, oy = (xs - W / 2.0) * PX_MM, -(ys - H / 2.0) * PX_MM
+    r = math.radians(rotation_deg)
+    return ox * math.cos(r) - oy * math.sin(r), ox * math.sin(r) + oy * math.cos(r)
+
+
+def flat_scene(angle_deg: float, through: tuple[float, float] = (51.0, 52.03), *, camera_deg: float = 0.0,
+               only_at: Callable[[float, float], bool] | None = None, blur_px: float = 0.8, noise: float = 2.0):
+    """The wafer flat: a straight edge at ``angle_deg`` (stage axes, counter-clockwise) through the stage point
+    ``through``, dark below, as seen at the current stage position."""
+    ox, oy = _camera_offsets(camera_deg)
+    a = math.radians(angle_deg)
+
+    def render(x: float, y: float, rng: np.random.Generator) -> np.ndarray:
+        if only_at is not None and not only_at(x, y):
+            return np.full((H, W), 90.0) + rng.normal(0.0, noise, (H, W))
+        d = ((x + ox - through[0]) * -math.sin(a) + (y + oy - through[1]) * math.cos(a)) / PX_MM
+        return 60.0 + 120.0 / (1.0 + np.exp(-d / blur_px)) + rng.normal(0.0, noise, (H, W))
+    return render
+
+
+def grid_scene(angle_deg: float, *, pitch: tuple[float, float] = (0.05, 0.05), radius: float = 0.016,
+               origin: tuple[float, float] = (51.0131, 52.0072), camera_deg: float = 0.0, blur_px: float = 0.7,
+               noise: float = 4.0):
+    """A grid of mesas (discs of ``radius`` mm) with rows at ``angle_deg`` (stage axes) and ``pitch`` (along, across
+    the rows, mm), node (0, 0) at the stage point ``origin``."""
+    ox, oy = _camera_offsets(camera_deg)
+    a = math.radians(angle_deg)
+
+    def render(x: float, y: float, rng: np.random.Generator) -> np.ndarray:
+        px, py = x + ox - origin[0], y + oy - origin[1]
+        u = (px * math.cos(a) + py * math.sin(a)) / pitch[0]
+        v = (-px * math.sin(a) + py * math.cos(a)) / pitch[1]
+        d = np.hypot((u - np.rint(u)) * pitch[0], (v - np.rint(v)) * pitch[1]) / PX_MM
+        return 50.0 + 150.0 / (1.0 + np.exp((d - radius / PX_MM) / blur_px)) + rng.normal(0.0, noise, (H, W))
+    return render
+
+
+def baseline_params(method: TiltMethod, **overrides: Any) -> TiltParams:
+    values: dict[str, Any] = {
+        "start_pos": START, "method": method, "max_moves": 0, "step_mm": 0.3, "autofocus": False, "refocus": False,
+        "straight_edge": StraightEdgeDetection(angle_expected_deg=0.0, angle_range_deg=5.0),
+        "long_baseline": LongBaselineDetection(length_mm=20.0)}
+    values.update(overrides)
+    return TiltParams(**values)
+
+
+def test_long_baseline_parameters_from_the_profile():
+    p = TiltParams.from_profile(Settings())
+    lb = p.long_baseline
+    assert (lb.length_mm, lb.first_step_mm, lb.growth, lb.consistency_deg, lb.refocus, lb.lattice_pitch_um) == (
+        20.0, 0.0, 8.0, 0.5, False, 0.0)
+    q = TiltParams.from_profile(Settings({"measure.tilt.method": 2, "measure.tilt.lblength": "12,5",
+                                          "measure.tilt.lbfirststep": 1, "measure.tilt.lbgrowth": 4,
+                                          "measure.tilt.lbtolerancedeg": 0.2, "measure.tilt.lbrefocus": "TRUE",
+                                          "measure.tilt.latticepitchum": 50}), long_baseline={"growth": 3})
+    assert q.method is TiltMethod.LONG_BASELINE_EDGE
+    assert (q.long_baseline.length_mm, q.long_baseline.first_step_mm, q.long_baseline.growth) == (12.5, 1.0, 3.0)
+    assert (q.long_baseline.consistency_deg, q.long_baseline.refocus, q.long_baseline.lattice_pitch_um) == (
+        0.2, True, 50.0)
+    assert TiltParams(method="Long Baseline Edge").method is TiltMethod.LONG_BASELINE_EDGE
+    assert TiltParams(method="lattice").method is TiltMethod.LATTICE == 3
+    assert TiltParams().method is TiltMethod.STRAIGHT_EDGE                  # the default is unchanged
+
+
+@pytest.mark.parametrize("bad", [{"length_mm": 0}, {"growth": 1.0}, {"consistency_deg": 0}, {"first_step_mm": -1},
+                                 {"lattice_pitch_um": -5}, {"length_mm": "x"}])
+def test_invalid_long_baseline_parameters_refused(rig, bad):
+    r = rig(flat_scene(0.0))
+    with pytest.raises(TiltError) as info:
+        run(r, {"method": 2, "long_baseline": bad})
+    assert info.value.code == 9002 and r.view.calls == []
+
+
+def test_long_baseline_edge_precision(rig):
+    true = 0.137
+    r = rig(flat_scene(true))
+    report = run(r, baseline_params(TiltMethod.LONG_BASELINE_EDGE))
+    assert report.valid and abs(report.angle_deg - true) < 0.005
+    b = report.baseline
+    assert b is not None and b.complete and b.consistent and b.in_range and b.fit is not None
+    assert b.offsets_mm == (0.0, -10.0, 10.0) and b.fit.length == pytest.approx(20.0, abs=0.01)
+    assert len(b.image_angles_deg) == 3 and abs(b.image_angle_deg - true) < 0.05
+    # every point is on the edge (wafer mm: stage − origin)
+    a = math.radians(true)
+    for x, y in b.points_mm:
+        assert abs((x + ORIGIN[0] - 51.0) * -math.sin(a) + (y + ORIGIN[1] - 52.03) * math.cos(a)) < 0.0002
+    assert 0.0 < report.uncertainty_deg < 0.005                            # 0.5 µm stage repeatability over 20 mm
+    assert states(r) == ["Start", "Started", "Move To Pos", "Position OK?", "Measure Tilt (Long Baseline Edge)",
+                         "Move To Baseline Pos", "Baseline Position OK?", "Measure Baseline Point",
+                         "Move To Baseline Pos", "Baseline Position OK?", "Measure Baseline Point", "Notify Client",
+                         "Display & Save", "Finished"]
+    assert codes(r) == [301, 302, 303, 304, 310, 312, 313, 310, 312, 313, 310, 309, 400, 500]
+    [tilt] = ws(r, "measure_tilt")
+    assert tilt["Tilt"] == {"Angle": f"{report.angle_deg:.6f}", "Unit": "degrees"}
+    assert r.xy.position() == pytest.approx((51.0 + 10.0 * math.cos(a), 52.03 + 10.0 * math.sin(a)), abs=0.002)
+    texts = [s.text for s in r.services.images.overlays["tilt"] if isinstance(s, Text)]
+    assert texts == [f"TILT ANGLE: {report.angle_deg:.3f}° ± {report.uncertainty_deg:.3f}°"]
+    # the LabVIEW method on the same wafer: one field of view (0.64 mm)
+    old = run(rig(flat_scene(true)), edge_params(straight_edge=StraightEdgeDetection(
+        search_direction=RakeDirection.TOP_TO_BOTTOM, step_px=20, width=5, edge_method=EdgeMethod.BEST_EDGE_RAKE)))
+    assert old.valid and abs(old.angle_deg - true) > 4 * abs(report.angle_deg - true)
+
+
+def test_long_baseline_edge_is_immune_to_the_camera_rotation(rig):
+    true, camera = -0.42, 0.3                                              # the camera turned 0.3° on its mount
+    report = run(rig(flat_scene(true, camera_deg=camera)), baseline_params(TiltMethod.LONG_BASELINE_EDGE))
+    assert report.valid and abs(report.angle_deg - true) < 0.005
+    assert report.baseline is not None
+    assert report.baseline.image_angle_deg == pytest.approx(true - camera, abs=0.02)  # what one image sees
+    old = run(rig(flat_scene(true, camera_deg=camera)), edge_params(straight_edge=StraightEdgeDetection(
+        search_direction=RakeDirection.TOP_TO_BOTTOM, step_px=20, width=5)))
+    assert abs(old.angle_deg - true) > 0.2                                 # the one-image method: off by the mount
+
+
+def test_long_baseline_edge_inconsistent_with_the_images_is_not_a_tilt(rig):
+    r = rig(flat_scene(0.5, camera_deg=0.8))                               # 0.8° > the 0.5° tolerance
+    with pytest.raises(TiltFailed) as info:
+        run(r, baseline_params(TiltMethod.LONG_BASELINE_EDGE))
+    assert info.value.code == TILT_NOT_FOUND                               # every search position tried
+    b = info.value.report.baseline
+    assert b is not None and b.complete and not b.consistent and b.in_range
+    assert info.value.report.angle_deg == pytest.approx(0.5, abs=0.005)
+    assert states(r).count("Measure Tilt (Long Baseline Edge)") == 2
+    assert any(level == "warning" and "inconsistent" in text for level, text in r.log.lines)
+    texts = [s.text for s in r.services.images.overlays["tilt"] if isinstance(s, Text)]
+    assert texts == ["TILT INCONSISTENT"]
+
+
+def test_long_baseline_edge_out_of_range_is_an_error(rig):
+    r = rig(flat_scene(2.0))
+    params = baseline_params(TiltMethod.LONG_BASELINE_EDGE,
+                             straight_edge=StraightEdgeDetection(angle_expected_deg=0.0, angle_range_deg=1.0))
+    with pytest.raises(TiltFailed) as info:
+        run(r, params)
+    assert info.value.code == TILT_OUT_OF_RANGE and info.value.state == "Display & Save" and info.value.status == 1499
+    assert info.value.report.angle_deg == pytest.approx(2.0, abs=0.005) and ws(r, "measure_tilt") == []
+
+
+def test_long_baseline_edge_lost_tries_the_next_search_position(rig):
+    near_start = flat_scene(0.2, only_at=lambda x, y: abs(x - 51.0) < 1.0)   # the flat seen around the start only
+    r = rig(near_start)
+    with pytest.raises(TiltFailed) as info:
+        run(r, baseline_params(TiltMethod.LONG_BASELINE_EDGE))
+    assert info.value.code == TILT_NOT_FOUND and r.status.codes[-1] == 1499
+    report = info.value.report
+    assert math.isnan(report.angle_deg) and report.baseline is not None and not report.baseline.complete
+    assert report.baseline.points_mm and len(report.baseline.points_mm) == 1
+    assert any("edge lost at -10.000 mm" in text for _, text in r.log.lines)
+    seq = states(r)
+    assert seq.count("Measure Tilt (Long Baseline Edge)") == 2 and seq[-3:] == ["Display & Save", "Move To Pos",
+                                                                              "Error"]
+
+
+def test_long_baseline_edge_without_edge(rig):
+    r = rig(flat_scene(0.0, only_at=lambda x, y: False))
+    with pytest.raises(TiltFailed) as info:
+        run(r, baseline_params(TiltMethod.LONG_BASELINE_EDGE))
+    assert info.value.code == TILT_NOT_FOUND
+    assert any("no straight edge in the start image" in text for _, text in r.log.lines)
+
+
+def test_long_baseline_refocus_at_every_position(rig):
+    r = rig(flat_scene(0.1))
+    report = run(r, baseline_params(TiltMethod.LONG_BASELINE_EDGE, long_baseline=LongBaselineDetection(
+        length_mm=4.0, refocus=True)))
+    assert report.valid and len(r.rf.calls) == 2
+
+
+def test_lattice_precision_with_the_bootstrap_walk(rig):
+    true = 0.137
+    r = rig(grid_scene(true))
+    report = run(r, baseline_params(TiltMethod.LATTICE))
+    assert report.valid and abs(report.angle_deg - true) < 0.005
+    b = report.baseline
+    assert b is not None and b.complete and b.fit is not None and b.fit.length == pytest.approx(20.0, abs=0.06)
+    offsets = [abs(o) for o in b.offsets_mm]
+    assert offsets[:3] == pytest.approx([0.0, 0.5, 0.5], abs=1e-4)          # 10 pitches (measured) first
+    assert len(offsets) > 3 and offsets[-1] == pytest.approx(10.0, abs=0.03)
+    assert all(abs(o / 0.05 - round(o / 0.05)) < 0.01 for o in offsets)   # always on a mesa
+    a = math.radians(true)                                                 # every point on the start row
+    for x, y in b.points_mm:
+        across = (x + ORIGIN[0] - 51.0131) * -math.sin(a) + (y + ORIGIN[1] - 52.0072) * math.cos(a)
+        assert abs(across) < 0.0003
+    assert report.baseline.image_angle_deg == pytest.approx(true, abs=0.02)
+    assert 0.0 < report.uncertainty_deg < 0.005
+    assert TiltStatus.MEASURE_LATTICE in r.status.codes and ws(r, "measure_tilt")
+
+
+@pytest.mark.parametrize(("true", "camera", "pitch"), [(-1.3, 0.4, (0.05, 0.05)), (2.2, -0.3, (0.06, 0.04))])
+def test_lattice_rotated_camera_and_rectangular_grid(rig, true, camera, pitch):
+    report = run(rig(grid_scene(true, camera_deg=camera, pitch=pitch)),
+                 baseline_params(TiltMethod.LATTICE, long_baseline=LongBaselineDetection(length_mm=10.0)))
+    assert report.valid and abs(report.angle_deg - true) < 0.005
+    assert report.baseline is not None
+    assert report.baseline.image_angle_deg == pytest.approx(true - camera, abs=0.05)
+
+
+def test_lattice_without_grid(rig):
+    r = rig(flat_scene(0.0, only_at=lambda x, y: False))
+    with pytest.raises(TiltFailed) as info:
+        run(r, baseline_params(TiltMethod.LATTICE))
+    assert info.value.code == TILT_NOT_FOUND
+    assert any("no mesa grid in the start image" in text for _, text in r.log.lines)
+
+
+@pytest.mark.parametrize("method", [TiltMethod.LONG_BASELINE_EDGE, TiltMethod.LATTICE])
+def test_long_baseline_uncertainty_with_a_stage_repeatability(rig, method):
+    """The stage stops 0.5 µm (1σ, each axis) away from where it reports: the error stays within the reported
+    uncertainty (TiltOptions.stage_repeatability_um = 0.5 µm: about 0.002° over 20 mm)."""
+    true = 0.137
+    scene = flat_scene(true) if method is TiltMethod.LONG_BASELINE_EDGE else grid_scene(true)
+    jitter = np.random.default_rng(5)
+
+    def shaken(x: float, y: float, rng: np.random.Generator) -> np.ndarray:
+        ex, ey = jitter.normal(0.0, 0.0005, 2)
+        return scene(x + ex, y + ey, rng)
+    report = run(rig(shaken), baseline_params(method))
+    assert report.valid and 0.001 < report.uncertainty_deg < 0.004
+    assert abs(report.angle_deg - true) < 3.0 * report.uncertainty_deg
+
+
+def test_stop_during_the_baseline_walk(rig):
+    def stop(ctx: FunctionContext, state: str, data: dict[str, Any]) -> None:
+        if state == "Baseline Position OK?":
+            ctx.stop_event.set()
+    r = rig(flat_scene(0.1))
+    with pytest.raises(Stopped):
+        run(r, baseline_params(TiltMethod.LONG_BASELINE_EDGE), on_state=stop)
+    assert r.status.codes[-1] == TiltStatus.STOPPED and events(r)[-1] == "TILT Finished"
+    assert r.tilt.last_report is not None and not r.tilt.last_report.valid

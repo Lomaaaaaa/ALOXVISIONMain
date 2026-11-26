@@ -1,4 +1,5 @@
-"""Straight-edge tilt (``IMAQ Find Straight Edges 3`` stand-in) and the masking of a matched object.
+"""Straight-edge tilt (``IMAQ Find Straight Edges 3`` stand-in), the masking of a matched object, and the
+algorithms of the precise (long-baseline) tilt methods.
 
 Spec: ``docs/vision-core/map.md`` Part 4 §3.4 (``alox_vision_measure_tilt_straight_edge``), §3.2
 (``alox_vision_mask_matched_object``), Part 3 §3.13 (HL Tilt). Diagrams (cited ``<vi> dN``):
@@ -54,6 +55,51 @@ image so that object 1 is not found again — which only makes sense if the matc
 cannot tell which (the ``Image Model`` and ``0`` inputs of ``IMAQ ROIToMask 2`` are not readable):
 :func:`mask_matched_object` removes the object by default (``keep_inside=False``) and keeps only it with
 ``keep_inside=True`` (an open question for the owner).
+
+Precise methods (Python only; owner's answer R22–R24 "build a better method")
+-----------------------------------------------------------------------------
+The algorithms of the Tilt Methods Long Baseline Edge and Lattice (:mod:`alox.functions.tilt`, which moves the
+stage). The LabVIEW methods measure the angle **inside one field of view**: the straight edge against the camera's
+pixel axes, the two objects against a baseline of at most the field of view when both are in one image. Their limits:
+a 1 px error over a 2000 px image is 0.03°, NI's 1-D edges are interpolated on a ``Step Size`` rake (30 px by
+default) with a parabola, and above all the camera's mounting rotation against the stage axes adds to the angle
+unseen (the mesa job moves the **stage**, so the angle it needs is against the stage axes).
+
+- :func:`fit_edge_line`: one edge point every ``step_px`` (default 4) pixels (:func:`edge_points_subpixel`: a profile
+  averaged over ``width_px`` lines, derivative of a Gaussian, the strongest extremum of the polarity, sub-pixel by
+  a Gaussian through three samples, exact for a blurred step), RANSAC + total least squares
+  (:func:`alox.vision.geometry.fit_line_ransac`); the angle's 1σ from the residuals; the **point of the edge nearest
+  the image centre** with its 1σ.
+- :func:`detect_mesas`: Otsu threshold, particles (border, size outliers dropped), grey-weighted centroids over the
+  particle grown by 2 px (no threshold bias); nothing without a pattern (contrast < 6 × :func:`noise_sigma`).
+  :func:`fit_lattice`: the dominant direction of the nearest-neighbour vectors (mean of 4φ: folded to (−45°, 45°]),
+  the pitches along and across, integer indices, least-squares lattice (origin, row and column vectors) with
+  re-indexing and outlier rejection; rectangular or oblique grids (a hexagonal grid is not handled: its rows are
+  60° apart).
+- :func:`fit_baseline`: the line through the feature's points measured at stage positions far apart (wafer mm),
+  ``atan2(Δy, Δx)`` and its 1σ (points' 1σ across the line — detection and stage repeatability — over their spread
+  along it, or the residuals when larger); :func:`baseline_target`, :func:`next_baseline_step`,
+  :func:`pick_row_mesa`: the walk along the feature (predict where it is, grow the baseline only as far as the
+  current uncertainty allows, keep the mesa of the start row).
+
+Precision on synthetic images (320 × 240 px at 2 µm, noise σ 2–4 grey levels, edge blur 0.8 px; tests
+``test_vision_tilt.py`` / ``test_functions_tilt.py``; true angle 0.137°):
+
+=================================================  ================  ===============================
+method                                             angle error       with the camera turned 0.3°
+=================================================  ================  ===============================
+LabVIEW straight edge (rake, 20 px step), 1 image  0.001–0.004°      0.29° (the mounting rotation)
+:func:`fit_edge_line`, 1 image                     0.0002–0.0003°    0.30° (the mounting rotation)
+:func:`fit_lattice`, 1 image                       0.001–0.002°      0.30° (the mounting rotation)
+Long Baseline Edge, L = 20 mm (3 images)           0.00002°          0.00002°
+Lattice, L = 20 mm (7 images, 6 moves)             0.00015°          0.00015°
+=================================================  ================  ===============================
+
+On a machine the long-baseline angle is limited by the stage: a repeatability σ gives ``σ / sqrt(Σ(s − s̄)²)``
+(0.002° for 0.5 µm over ±10 mm, three points; the reported uncertainty includes it, the tests shake the stage by
+0.5 µm and stay within it), plus the straightness of the X/Y guides over L, which no measurement on one axis can
+separate from the wafer. The one-image angles stay available as the consistency check (their difference to the
+baseline angle is the camera's rotation, plus the one-image error).
 """
 
 from __future__ import annotations
@@ -65,22 +111,36 @@ from dataclasses import dataclass
 from enum import IntEnum
 
 import numpy as np
+from scipy import ndimage
 
-from .edges import Edge, EdgeOptions, detect_edges, find_edges_on_line
-from .geometry import GeometryError, Line, fit_line_ransac
+from .edges import Edge, EdgeOptions, EdgePolarity, detect_edges, find_edges_on_line
+from .geometry import GeometryError, Line, fit_line_ransac, fit_line_tls
 from .wafer import straight_edge_tilt
 
 __all__ = [
+    "BaselineFit",
+    "EdgeLineFit",
     "EdgeMethod",
+    "LatticeFit",
     "LineOptions",
     "RakeDirection",
     "SearchLine",
     "StraightEdge",
     "StraightEdgeSearch",
     "StraightEdgeTiltReport",
+    "baseline_target",
+    "detect_mesas",
+    "edge_points_subpixel",
     "find_straight_edges",
+    "fit_baseline",
+    "fit_edge_line",
+    "fit_lattice",
+    "fold_angle",
     "mask_matched_object",
     "measure_tilt_straight_edge",
+    "next_baseline_step",
+    "noise_sigma",
+    "pick_row_mesa",
     "rake_lines",
 ]
 
@@ -481,3 +541,414 @@ def _inside_convex(poly: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarr
         neg &= cross <= 0
     return pos | neg
 
+
+
+# ================================================================================================== precise methods
+def fold_angle(angle_deg: float, period: float = 180.0, centre: float = 0.0) -> float:
+    """``angle_deg`` modulo ``period`` in ``(centre − period/2, centre + period/2]``; NaN stays NaN. A line is
+    defined modulo 180°, a rectangular lattice modulo 90°."""
+    if not math.isfinite(angle_deg):
+        return math.nan
+    r = math.fmod(float(angle_deg) - centre, period)
+    if r <= -period / 2.0:
+        r += period
+    elif r > period / 2.0:
+        r -= period
+    return centre + r + 0.0
+
+
+def _grey(image: np.ndarray) -> np.ndarray:
+    arr = np.asarray(image, dtype=np.float64)
+    if arr.ndim == 3:
+        arr = arr[..., :3].mean(axis=2)
+    if arr.ndim != 2 or arr.size == 0:
+        raise ValueError(f"a non-empty image is required, got shape {np.shape(image)}")
+    return arr
+
+
+def _displayed_deg(dx: float, dy: float) -> float:
+    """Direction of the pixel vector ``(dx, dy)`` counter-clockwise **as displayed** (image Y down)."""
+    return math.degrees(math.atan2(-dy, dx))
+
+
+@dataclass(frozen=True)
+class EdgeLineFit:
+    """A straight edge fitted on sub-pixel edge points (:func:`fit_edge_line`), pixels. ``angle_deg``: the line's
+    direction as displayed, in (−90°, 90°]; ``angle_sigma_deg`` its 1σ from the residuals; ``centre_point``: the foot
+    of the perpendicular from the image centre ``(W/2, H/2)`` (the centre of :func:`alox.vision.wafer.tracking_move`)
+    and ``centre_sigma_px`` the 1σ of the line's position there; ``points``: the edge points used (inliers)."""
+
+    line: Line
+    angle_deg: float
+    angle_sigma_deg: float
+    points: np.ndarray
+    candidates: int
+    rms_px: float
+    centre_point: Point
+    centre_sigma_px: float
+    horizontal: bool
+
+    @property
+    def n_points(self) -> int:
+        return int(self.points.shape[0])
+
+
+def _edge_is_horizontal(grey: np.ndarray, smoothing: float) -> bool:
+    """The dominant gradient is vertical (the edge runs left → right)."""
+    gy = ndimage.gaussian_filter(grey, max(smoothing, 0.5), order=(1, 0))
+    gx = ndimage.gaussian_filter(grey, max(smoothing, 0.5), order=(0, 1))
+    return bool(np.sum(gy * gy) >= np.sum(gx * gx))
+
+
+def edge_points_subpixel(image: np.ndarray, *, horizontal: bool, step_px: int = 4, width_px: int = 5,
+                         smoothing_px: float = 1.5, min_strength: float = 10.0,
+                         polarity: EdgePolarity | int = EdgePolarity.ALL) -> np.ndarray:
+    """One edge point per profile (N×2, pixels): profiles every ``step_px`` pixels across the edge (top → bottom for a
+    ``horizontal`` edge, left → right otherwise), each averaged over ``width_px`` parallel lines; the derivative of a
+    Gaussian (σ = ``smoothing_px``) gives the strength (scaled so that a sharp step of contrast C gives C); the
+    strongest extremum of the ``polarity`` (rising = dark → bright along the profile) of at least ``min_strength``;
+    its sub-pixel position by a Gaussian (log-parabola) through the three samples around the peak (exact for a
+    Gaussian-blurred step; a parabola when a sample is 0)."""
+    grey = _grey(image)
+    img = grey if horizontal else grey.T                      # the edge runs along the rows of ``img``
+    h, w = img.shape
+    step, width, sigma = max(1, int(step_px)), max(1, int(width_px)), max(0.5, float(smoothing_px))
+    if width > 1:
+        img = ndimage.uniform_filter1d(img, size=width, axis=1, mode="nearest")
+    cols = np.arange(((w - 1) % step) // 2, w, step)
+    g = ndimage.gaussian_filter1d(img[:, cols], sigma, axis=0, order=1, mode="nearest") * math.sqrt(2 * math.pi) * sigma
+    pol = EdgePolarity(int(polarity))
+    s = g if pol is EdgePolarity.RISING else (-g if pol is EdgePolarity.FALLING else np.abs(g))
+    margin = math.ceil(3.0 * sigma) + 1
+    if h <= 2 * margin + 2:
+        return np.empty((0, 2))
+    s = s.copy()
+    s[:margin] = -np.inf
+    s[h - margin:] = -np.inf
+    k = np.argmax(s, axis=0)
+    idx = np.arange(cols.size)
+    ok = s[k, idx] >= float(min_strength)
+    a = np.abs(g)
+    lo, mid, hi = a[k - 1, idx], a[k, idx], a[k + 1, idx]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        llo, lmid, lhi = np.log(lo), np.log(mid), np.log(hi)
+        den = llo - 2.0 * lmid + lhi
+        delta = np.where((lo > 0) & (hi > 0) & (den < 0), 0.5 * (llo - lhi) / den, np.nan)
+        pden = lo - 2.0 * mid + hi
+        parabola = np.where(pden != 0, 0.5 * (lo - hi) / pden, 0.0)
+    delta = np.clip(np.where(np.isfinite(delta), delta, parabola), -0.5, 0.5)
+    along = cols[ok].astype(np.float64)
+    across = k[ok] + delta[ok]
+    pts = np.column_stack((along, across)) if horizontal else np.column_stack((across, along))
+    return pts.reshape(-1, 2)
+
+
+def fit_edge_line(image: np.ndarray, *, horizontal: bool | None = None, step_px: int = 4, width_px: int = 5,
+                  smoothing_px: float = 1.5, min_strength: float = 10.0,
+                  polarity: EdgePolarity | int = EdgePolarity.ALL, max_distance_px: float = 1.5,
+                  min_points: int = 5, seed: int = 0) -> EdgeLineFit | None:
+    """The straight edge of ``image`` (:func:`edge_points_subpixel`, then :func:`alox.vision.geometry.
+    fit_line_ransac`: inliers within ``max_distance_px``, total least squares on them). ``horizontal`` None: from the
+    dominant gradient direction. None when fewer than ``min_points`` points support the line."""
+    grey = _grey(image)
+    if horizontal is None:
+        horizontal = _edge_is_horizontal(grey, smoothing_px)
+    pts = edge_points_subpixel(grey, horizontal=horizontal, step_px=step_px, width_px=width_px,
+                               smoothing_px=smoothing_px, min_strength=min_strength, polarity=polarity)
+    if pts.shape[0] < max(2, int(min_points)):
+        return None
+    fitted = _fit(pts, max_distance_px, seed)
+    if fitted is None:
+        return None
+    line, inliers = fitted
+    used = pts[inliers]
+    n = used.shape[0]
+    if n < max(3, int(min_points)):
+        return None
+    d = line.signed_distances(used)
+    rms = math.sqrt(float(np.sum(d * d)) / max(n - 2, 1))
+    dx, dy = line.direction
+    s = used @ np.array([dx, dy])
+    s_mean = float(s.mean())
+    spread = float(np.sum((s - s_mean) ** 2))
+    if spread <= 0.0:
+        return None
+    h, w = grey.shape
+    cx, cy = w / 2.0, h / 2.0
+    dist = line.a * cx + line.b * cy + line.c
+    foot = (cx - line.a * dist, cy - line.b * dist)
+    s_foot = foot[0] * dx + foot[1] * dy
+    centre_sigma = rms * math.sqrt(1.0 / n + (s_foot - s_mean) ** 2 / spread)
+    return EdgeLineFit(line=line, angle_deg=fold_angle(_displayed_deg(dx, dy)),
+                       angle_sigma_deg=math.degrees(rms / math.sqrt(spread)), points=used,
+                       candidates=int(pts.shape[0]), rms_px=rms, centre_point=foot, centre_sigma_px=centre_sigma,
+                       horizontal=bool(horizontal))
+
+
+# -------------------------------------------------------------------------------------------------- lattice
+def _otsu(values: np.ndarray) -> float:
+    v = np.asarray(values, dtype=np.float64).ravel()
+    lo, hi = float(v.min()), float(v.max())
+    if hi <= lo:
+        return lo
+    hist, edges = np.histogram(v, bins=256, range=(lo, hi))
+    centres = (edges[:-1] + edges[1:]) / 2.0
+    w0 = np.cumsum(hist).astype(np.float64)
+    w1 = w0[-1] - w0
+    m = np.cumsum(hist * centres)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        between = w0 * w1 * (m / w0 - (m[-1] - m) / w1) ** 2
+    between[~np.isfinite(between)] = -1.0
+    return float(edges[int(np.argmax(between)) + 1])
+
+
+def noise_sigma(image: np.ndarray) -> float:
+    """The pixel noise (1σ) of an image: the median absolute difference of horizontal neighbours / (0.6745·√2),
+    insensitive to the edges (a minority of the differences)."""
+    grey = _grey(image)
+    if grey.shape[1] < 2:
+        return 0.0
+    return float(np.median(np.abs(np.diff(grey, axis=1)))) / (0.6745 * math.sqrt(2.0))
+
+
+def detect_mesas(image: np.ndarray, *, bright: bool | None = None, min_area_px: float = 6.0,
+                 smoothing_px: float = 1.0, min_snr: float = 6.0) -> np.ndarray:
+    """Centres (N×2, pixels) of the mesas (discs or any compact pads) of a grid: Otsu threshold of the lightly
+    smoothed image, the minority phase as objects (``bright`` None) or the bright / dark one; nothing when the two
+    phases differ by less than ``min_snr`` × :func:`noise_sigma` (no pattern); 8-connected particles, those touching
+    the border and those whose area is outside [½, 2] × the median (merged, cut) dropped; each centre is the
+    grey-weighted centroid (weights ``(I − background) / (object − background)`` clipped to [0, 1]) over the particle
+    grown by 2 pixels, unbiased by the threshold for a symmetric object."""
+    grey = _grey(image)
+    smooth = ndimage.gaussian_filter(grey, smoothing_px) if smoothing_px > 0 else grey
+    high = smooth > _otsu(smooth)
+    if bright is None:
+        bright = bool(high.mean() <= 0.5)
+    mask = high if bright else ~high
+    if not mask.any() or mask.all():
+        return np.empty((0, 2))
+    labels, count = ndimage.label(mask, structure=np.ones((3, 3)))
+    index = np.arange(1, count + 1)
+    areas = np.asarray(ndimage.sum_labels(np.ones_like(grey), labels, index))
+    grown = np.where(labels > 0, labels, ndimage.grey_dilation(labels, size=(5, 5)))
+    border = np.unique(np.concatenate((grown[0], grown[-1], grown[:, 0], grown[:, -1])))
+    fg, bg = float(np.median(grey[mask])), float(np.median(grey[~mask]))
+    if fg == bg or abs(fg - bg) < float(min_snr) * noise_sigma(grey):
+        return np.empty((0, 2))
+    weights = np.clip((grey - bg) / (fg - bg), 0.0, 1.0)
+    total = np.asarray(ndimage.sum_labels(weights, grown, index))
+    keep = (areas >= float(min_area_px)) & ~np.isin(index, border) & (total > 0)
+    if not keep.any():
+        return np.empty((0, 2))
+    median = float(np.median(areas[keep]))
+    keep &= (areas >= 0.5 * median) & (areas <= 2.0 * median)
+    centres = np.asarray(ndimage.center_of_mass(weights, grown, index[keep]), dtype=np.float64).reshape(-1, 2)
+    return centres[:, ::-1].copy()                                # (row, col) → (x, y)
+
+
+@dataclass(frozen=True)
+class LatticeFit:
+    """A rectangular lattice fitted on mesa centres (:func:`fit_lattice`), pixels: ``node(i, j) = origin + i·row +
+    j·column``; ``row`` is the lattice vector within ±45° of the image X axis as displayed, ``angle_deg`` its
+    direction in (−45°, 45°] and ``angle_sigma_deg`` the 1σ from the least-squares covariance; ``rms_px`` the 1σ of a
+    centre per axis (residuals); ``centres`` / ``indices`` the centres used and their ``(i, j)``."""
+
+    origin: Point
+    row: Point
+    column: Point
+    angle_deg: float
+    angle_sigma_deg: float
+    rms_px: float
+    centres: np.ndarray
+    indices: np.ndarray
+
+    @property
+    def pitch_row_px(self) -> float:
+        return math.hypot(*self.row)
+
+    @property
+    def pitch_across_px(self) -> float:
+        """The distance between two rows (the column vector's component across the rows)."""
+        return abs(self.row[0] * self.column[1] - self.row[1] * self.column[0]) / self.pitch_row_px
+
+    def node(self, i: float, j: float) -> Point:
+        return (self.origin[0] + i * self.row[0] + j * self.column[0],
+                self.origin[1] + i * self.row[1] + j * self.column[1])
+
+
+def _min_component(values: np.ndarray, mask: np.ndarray) -> float:
+    """Median over the points of the smallest ``values`` among their neighbours in ``mask``."""
+    per_point = np.where(mask, values, np.inf).min(axis=1)
+    per_point = per_point[np.isfinite(per_point)]
+    return float(np.median(per_point)) if per_point.size else math.nan
+
+
+def fit_lattice(centres: np.ndarray, *, reference: Sequence[float] | None = None, min_nodes: int = 6,
+                min_fraction: float = 0.6, angle_hint_deg: float | None = None) -> LatticeFit | None:
+    """A rectangular (or oblique) lattice through the ``centres``: the coarse direction from the nearest-neighbour
+    vectors (mean of 4φ, so folded modulo 90°; or ``angle_hint_deg``), the pitches along and across it, integer
+    indices from the centre nearest ``reference`` (default the centroid), then a least-squares fit of ``origin``,
+    ``row``, ``column`` with re-indexing and rejection of centres farther than ¼ pitch from their node (3 passes).
+    None with fewer than ``min_nodes`` centres on the lattice, fewer than ``min_fraction`` of the centres on it, or
+    fewer than two rows and two columns."""
+    from scipy.spatial import cKDTree
+
+    pts = np.asarray(centres, dtype=np.float64).reshape(-1, 2)
+    n = pts.shape[0]
+    if n < max(4, int(min_nodes)):
+        return None
+    k = min(13, n)
+    dist, nn = cKDTree(pts).query(pts, k=k)
+    vec = pts[nn[:, 1:]] - pts[:, None, :]
+    dist = dist[:, 1:]
+    dmin = float(np.median(dist[:, 0]))
+    if not dmin > 0:
+        return None
+    if angle_hint_deg is None:
+        near = vec[dist < 1.25 * dmin]
+        phi = np.arctan2(-near[:, 1], near[:, 0])
+        theta = math.atan2(float(np.sin(4 * phi).sum()), float(np.cos(4 * phi).sum())) / 4.0
+    else:
+        theta = math.radians(float(angle_hint_deg))
+    u = np.array([math.cos(theta), -math.sin(theta)])            # displayed angle θ, pixel coordinates
+    v = np.array([math.sin(theta), math.cos(theta)])              # θ − 90° as displayed (down for θ = 0)
+    pu, pv = np.abs(vec @ u), np.abs(vec @ v)
+    pitch_u = _min_component(pu, (pv < 0.35 * pu) & (dist < 4.0 * dmin))      # pitches up to 4:1
+    pitch_v = _min_component(pv, (pu < 0.35 * pv) & (dist < 4.0 * dmin))
+    if not (pitch_u > 0 and pitch_v > 0):
+        return None
+    ref = np.asarray(reference if reference is not None else pts.mean(axis=0), dtype=np.float64)
+    base = pts[int(np.argmin(np.hypot(*(pts - ref).T)))]
+    ij = np.column_stack((np.rint((pts - base) @ u / pitch_u), np.rint((pts - base) @ v / pitch_v)))
+    keep = np.ones(n, dtype=bool)
+    coef = np.zeros((3, 2))
+    for _ in range(3):
+        if np.unique(ij[keep, 0]).size < 2 or np.unique(ij[keep, 1]).size < 2 or keep.sum() < 4:
+            return None
+        x = np.column_stack((np.ones(n), ij))
+        coef, *_ = np.linalg.lstsq(x[keep], pts[keep], rcond=None)
+        basis = coef[1:].T                                         # columns: a, b
+        if abs(np.linalg.det(basis)) < 1e-9:
+            return None
+        ij = np.rint(np.linalg.solve(basis, (pts - coef[0]).T).T)
+        res = np.hypot(*(pts - np.column_stack((np.ones(n), ij)) @ coef).T)
+        keep = res <= 0.25 * min(math.hypot(*coef[1]), math.hypot(*coef[2]))
+        # one centre per node: the nearest
+        order = np.lexsort((res, ij[:, 1], ij[:, 0]))
+        dup = np.zeros(n, dtype=bool)
+        same = np.all(ij[order][1:] == ij[order][:-1], axis=1)
+        dup[order[1:][same]] = True
+        keep &= ~dup
+    if (keep.sum() < max(4, int(min_nodes), float(min_fraction) * n) or np.unique(ij[keep, 0]).size < 2
+            or np.unique(ij[keep, 1]).size < 2):
+        return None
+    x = np.column_stack((np.ones(n), ij))[keep]
+    coef, *_ = np.linalg.lstsq(x, pts[keep], rcond=None)
+    resid = pts[keep] - x @ coef
+    m = int(keep.sum())
+    rms = math.sqrt(float(np.sum(resid * resid)) / (2.0 * max(m - 3, 1)))
+    cov = np.linalg.inv(x.T @ x) * rms * rms
+    a, b = coef[1], coef[2]
+    use_a = abs(fold_angle(_displayed_deg(*a))) <= 45.0
+    row, column, r_index = (a, b, 1) if use_a else (b, a, 2)
+    indices = ij[keep][:, [0, 1] if use_a else [1, 0]]
+    sign = 1.0 if row[0] >= 0 else -1.0
+    row, indices = row * sign, indices * np.array([sign, 1.0])
+    sigma = math.degrees(math.sqrt(cov[r_index, r_index]) / math.hypot(*row))
+    return LatticeFit(origin=(float(coef[0, 0]), float(coef[0, 1])), row=(float(row[0]), float(row[1])),
+                      column=(float(column[0]), float(column[1])), angle_deg=fold_angle(_displayed_deg(*row), 90.0),
+                      angle_sigma_deg=sigma, rms_px=rms, centres=pts[keep], indices=indices)
+
+
+# -------------------------------------------------------------------------------------------------- long baseline
+@dataclass(frozen=True)
+class BaselineFit:
+    """The line through points measured at stage positions far apart (:func:`fit_baseline`), in the points' frame
+    (wafer mm, Y up): ``angle_deg`` = ``atan2(Δy, Δx)`` of the line folded modulo ``period`` around ``centre``;
+    ``sigma_deg`` its 1σ; ``length`` the extent of the points along the line; ``rms`` the rms perpendicular residual
+    (0 for two points); ``point`` / ``direction`` the line (centroid, unit vector)."""
+
+    angle_deg: float
+    sigma_deg: float
+    length: float
+    rms: float
+    point: Point
+    direction: Point
+    n_points: int
+
+
+def fit_baseline(points: Sequence[Sequence[float]], sigmas: Sequence[float] | None = None, *,
+                 extra_sigma: float = 0.0, period: float = 180.0, centre: float = 0.0) -> BaselineFit:
+    """Total-least-squares line through ``points`` (at least two distinct). The uncertainty: each point's 1σ across
+    the line ``sqrt(sigma_i² + extra_sigma²)`` (detection and stage repeatability) over the spread of the points
+    along it, ``σθ = σ / sqrt(Σ(s − s̄)²)`` (two points at L apart: ``√2·σ / L``); with three points or more, the
+    residuals' estimate ``sqrt(Σd² / (n − 2)) / sqrt(Σ(s − s̄)²)`` when larger."""
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    n = pts.shape[0]
+    line = fit_line_tls(pts)
+    dx, dy = line.direction
+    s = pts @ np.array([dx, dy])
+    spread = float(np.sum((s - s.mean()) ** 2))
+    sig = np.zeros(n) if sigmas is None else np.asarray(sigmas, dtype=np.float64).reshape(n)
+    sigma_pt = math.sqrt(float(np.mean(sig * sig)) + float(extra_sigma) ** 2)
+    d = line.signed_distances(pts)
+    rms = math.sqrt(float(np.mean(d * d))) if n > 2 else 0.0
+    sigma = sigma_pt / math.sqrt(spread)
+    if n > 2:
+        sigma = max(sigma, math.sqrt(float(np.sum(d * d)) / (n - 2)) / math.sqrt(spread))
+    centroid = pts.mean(axis=0)
+    return BaselineFit(angle_deg=fold_angle(math.degrees(math.atan2(dy, dx)), period, centre),
+                       sigma_deg=math.degrees(sigma), length=float(s.max() - s.min()), rms=rms,
+                       point=(float(centroid[0]), float(centroid[1])), direction=(dx, dy), n_points=n)
+
+
+def baseline_target(points: Sequence[Sequence[float]], start: Sequence[float], direction: Sequence[float],
+                    offset: float) -> Point:
+    """Where the feature is expected at ``offset`` along the line from the ``start`` point: on the line through the
+    ``points`` measured so far (one point: the line through ``start`` along ``direction``, a unit vector), ``offset``
+    from the projection of ``start``; the line's direction is oriented as ``direction``."""
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    p0 = np.asarray(start, dtype=np.float64)
+    u = np.asarray(direction, dtype=np.float64)
+    if pts.shape[0] >= 2:
+        fit = fit_baseline(pts)
+        d = np.asarray(fit.direction)
+        if d @ u < 0:
+            d = -d
+        c = np.asarray(fit.point)
+        foot = c + ((p0 - c) @ d) * d
+        u = d
+    else:
+        foot = p0
+    target = foot + float(offset) * u
+    return float(target[0]), float(target[1])
+
+
+def next_baseline_step(previous: float, half_length: float, *, sigma_deg: float, drift_limit: float,
+                       growth: float = 8.0, k_sigma: float = 4.0) -> float:
+    """The next half-baseline of a walk ±s₁, ±s₂, … along the feature: at most ``growth`` × the previous one and,
+    unless that is less than 1.5 × the previous, the longest for which the feature predicted with the angle's
+    uncertainty stays within ``drift_limit`` across the line at ``k_sigma`` σ; never beyond ``half_length``."""
+    tan = math.tan(math.radians(k_sigma * max(float(sigma_deg), 0.0)))
+    safe = float(drift_limit) / tan if tan > 0 else math.inf
+    return min(float(half_length), min(growth * previous, max(safe, 1.5 * previous)))
+
+
+def pick_row_mesa(candidates: Sequence[Sequence[float]], target: Sequence[float], direction: Sequence[float], *,
+                  pitch_along: float, pitch_across: float, line_point: Sequence[float],
+                  tolerance: float = 0.25) -> tuple[int, float] | None:
+    """The candidate (wafer mm) nearest ``target`` in lattice units, and its signed distance across the predicted row
+    (the line through ``line_point`` along the unit ``direction``); None when there is none or when it lies more than
+    ``tolerance`` × ``pitch_across`` off the row (the row cannot be told apart from its neighbours)."""
+    pts = np.asarray(candidates, dtype=np.float64).reshape(-1, 2)
+    if pts.shape[0] == 0:
+        return None
+    u = np.asarray(direction, dtype=np.float64)
+    nrm = np.array([-u[1], u[0]])
+    rel = pts - np.asarray(target, dtype=np.float64)
+    score = np.hypot((rel @ u) / pitch_along, (rel @ nrm) / pitch_across)
+    best = int(np.argmin(score))
+    across = float((pts[best] - np.asarray(line_point, dtype=np.float64)) @ nrm)
+    if abs(across) > tolerance * pitch_across:
+        return None
+    return best, across
