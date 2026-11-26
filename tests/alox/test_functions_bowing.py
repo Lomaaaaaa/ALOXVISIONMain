@@ -463,13 +463,20 @@ def test_autofocus_and_refocus_attempts_are_bounded(rig: Callable[..., SimpleNam
     assert err.value.status == 1020 and len(r.rf.calls) == 1
 
 
-def test_reset_wavelength_error(rig: Callable[..., SimpleNamespace]) -> None:
-    r = rig(wl=FakeWL(fail=True))
+def test_reset_wavelength_error_with_the_high_mag_camera(rig: Callable[..., SimpleNamespace]) -> None:
+    r = rig(wl=FakeWL(fail=True), profile={"measure.bowing.camera": "High Mag."})
     with pytest.raises(BowingFailed) as err:
         r.bowing.run(None, r.ctx)
     assert err.value.code == 9403 and err.value.status == 1001 and err.value.state == "Start"
     assert statuses(r) == [201, 1001] and not r.af.calls
     assert not [c for c in r.z.calls if c[0] == "move"]                # Zwafer2 not measured: Z not moved
+
+
+def test_low_mag_bowing_needs_no_monochromator(rig: Callable[..., SimpleNamespace]) -> None:
+    """Owner R7: a Low Mag function does not need the monochromator."""
+    r = rig(wl=FakeWL(fail=True))
+    r.bowing.run(None, r.ctx)
+    assert 1001 not in statuses(r) and r.af.calls
 
 
 def test_fast_method_ends_in_the_default_case(rig: Callable[..., SimpleNamespace]) -> None:

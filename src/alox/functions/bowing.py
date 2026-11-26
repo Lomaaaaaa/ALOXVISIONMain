@@ -715,10 +715,13 @@ class _BowingJob:
             wl = self.s.device("wl")
             self.initial_wl = int(wl.position())
             wl.goto(0 if self.p.camera_type is CameraType.HIGH_MAG else self.initial_wl)
-        except _LV_ERRORS as exc:
-            self.set_status(BowingStatus.ERROR_RESET_WAVELENGTH)    # 1001
-            self.log_error("Bowing Measurement (Reset Wavelength)", exc)
-            nxt = self.fail(exc, BowState.START)
+        except (*_LV_ERRORS, LookupError) as exc:
+            if self.p.camera_type is CameraType.LOW_MAG:            # owner R7: Low Mag needs no monochromator
+                log.warning("bowing (Low Mag): monochromator not available, wavelength left as is: %s", exc)
+            else:
+                self.set_status(BowingStatus.ERROR_RESET_WAVELENGTH)    # 1001
+                self.log_error("Bowing Measurement (Reset Wavelength)", exc)
+                nxt = self.fail(exc, BowState.START)
         try:                                                        # "Set XY high speed"
             self.xy.set_speed(_float(self.get("hardware.xy.speed", 10.0), "hardware.xy.speed"))
         except _LV_ERRORS as exc:

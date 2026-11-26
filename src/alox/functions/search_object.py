@@ -66,8 +66,8 @@ Fixed / changed:
 - ``hardware.xy.speed`` missing: LabVIEW sent ``VEL 0`` (its default); the XY device's configured speed is used.
 - A failed ``Get Position XY`` (LabVIEW: (0, 0)) keeps the previous ``Current XY Pos``.
 - ``Found Pos`` is None when nothing is found (LabVIEW converted the pixel (0, 0) of an empty match).
-- The hardware check uses the device states (READY) instead of ``ERR?``/status commands; the monochromator is checked
-  only by its state.
+- The hardware check uses the device states (READY) instead of ``ERR?``/status commands. Owner's decision R7: the
+  monochromator is not checked any more (a Low Mag function does not need it; LabVIEW refused to start without it).
 - Positions are float64 (LabVIEW SGL). The system status 204/500 ("LL running"/"Idle") is the core's (as Get Image).
 - The run panel (``_ui_run``) is not ported: its events are ``ctx.set_state`` data (``event``: ``DO Started``, ``DO
   Moving``, ``DO Autofocus``, ``DO Refocus``, ``DO Searching``, ``DO Finished``); the 1 s display pauses are kept
@@ -281,7 +281,7 @@ class SearchObjectOptions:
     move_retries: int = 3                    # Error Count ≥ 3 → Error
     refocus_retries: int = 4                 # Refocus Err ≥ 4 → Error
     number_of_matches: int = 50
-    required_devices: tuple[str, ...] = ("xy", "z", "lowmag", "wl")    # Started frame 0
+    required_devices: tuple[str, ...] = ("xy", "z", "lowmag")    # Started frame 0, without the monochromator (owner R7)
     x_stage_invert: bool = False             # debug globals of get_position (OFF for AET)
     y_stage_invert: bool = False
     camera: str = "lowmag"

@@ -360,10 +360,6 @@ def test_no_object_found_after_the_last_position(rig):
 
 
 def test_hardware_check_is_9046(rig):
-    r = rig(devices={"wl": None})
-    with pytest.raises(FunctionFailed) as info:
-        run(r, params(r))
-    assert info.value.code == DETECT_OBJECT_HARDWARE and "wl" in info.value.source
     r = rig()
     r.services.devices["lowmag"].state = DeviceState.FAULT
     with pytest.raises(FunctionFailed) as info:
