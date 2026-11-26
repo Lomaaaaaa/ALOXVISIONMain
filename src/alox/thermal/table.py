@@ -104,7 +104,7 @@ def ordinal(n: int) -> str:
 
 def default_csv_name(now: datetime | None = None) -> str:
     """``Thermal_measurement_%y%m%d_%H%M%S.csv`` at ``now`` (local time; ``SM d161``)."""
-    return (now or datetime.now()).strftime(CSV_NAME_FORMAT) + ".csv"
+    return (now or datetime.now().astimezone()).strftime(CSV_NAME_FORMAT) + ".csv"
 
 
 # ---------------------------------------------------------------------------------------------- points

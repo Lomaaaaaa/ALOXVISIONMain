@@ -165,7 +165,7 @@ def load_thermal_settings(ini: Any, *, warn: Callable[[str], None] = log.warning
     script = get("hardware.bandit.ScriptPythonPath", "")
     return ThermalSettings(
         diameters=tuple(diameters), nb_points=tuple(counts), samples=samples,
-        offset_angle=int(round(float(get("hardware.bandit.offsetAngle", 10)))), wait_ms=wait,
+        offset_angle=round(float(get("hardware.bandit.offsetAngle", 10))), wait_ms=wait,
         script_command=str(script) if script is not None else "",
         bandit_enabled=bool(get("hardware.bandit.enableBandit", True)),
         origin=(float(get("hardware.xy.chuckxorg", 0.0)), float(get("hardware.xy.chuckyorg", 0.0))),
