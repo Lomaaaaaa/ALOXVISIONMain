@@ -71,3 +71,7 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 | R15 | Get Image digital Gain ever ≠ 1? | 1 | functions/get_image.py |
 | R16 | Recorded images with LabVIEW's results (Search Object, measure_mesa) and recipe model/mask PNGs, to validate the image algorithms | synthetic tests only | vision/edges.py, matching.py |
 | R17 | NI Vision run-time licence kept on the machines, and `nivision.h`, to finish the exact NI pattern matcher? | OpenCV matcher | vision/matching.py |
+| R18 | Continuous mesa job: after an error LabVIEW sends `failed` but restarts; keep, or end the job? | restart | functions/mesa.py |
+| R19 | Stop of a continuous mesa job sends `failed` (LabVIEW), not `finished`: keep? | `failed` | functions/mesa.py |
+| R20 | Send `measure_mesa` also for cycles where the mesa or oxide was not found? | only found ones | functions/mesa.py |
+| R21 | Recipe EXPOSURE MODE value 1 meaning; Oxyd Target key `measure.oxyd.oxydtarget` or `measure.mesa.oxydtarget`? | auto exposure; both read | functions/mesa.py |
