@@ -117,3 +117,7 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 | S2 | Rectangle: LabVIEW's Mean is 0, so the default measure type gives nothing. Which Oxyd Measure Type do you use for Rectangle (Fit = equivalent diameter, Surface = height)? | as LabVIEW | functions/measure_oxyd.py |
 | S3 | Line: is Median = oxidised depth per side what you use, and which measure type? | as LabVIEW | functions/measure_oxyd.py |
 | S4 | Object learning searches 0–360° (≈1.4 s on a full image): acceptable, or recommend a downsampling? | 0–360° | functions/detect_circle.py |
+| S5 | XY stage repeatability and guide straightness over 20 mm (the long-baseline tilt assumes 0.5 µm repeatability) | 0.5 µm | functions/tilt.py |
+| S6 | Are the mesa grid rows designed parallel to the flat? Should Tilt Correction prefer the lattice angle? Any hexagonal grids (not supported)? | rows parallel; rectangular grids | vision/tilt.py |
+| S7 | Is there a mesa-free margin along the flat, and is the flat visible at the tilt start position at Low Mag? | assumed | functions/tilt.py |
+| S8 | After the long-baseline walk, go back to the start position? (today: left at the last baseline position) | left there | functions/tilt.py |
