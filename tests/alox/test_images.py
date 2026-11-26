@@ -315,3 +315,19 @@ def test_core_delegates_to_the_store(tmp_path: Path):
     core.stream_stop()
     store.close()
     assert core.camera_status("highmag")["ImageTotal"] == "1"
+
+
+def test_result_overlays_stay_on_the_live_images_until_cleared():
+    """Owner I2: a function's result overlays stay on the following images until the next function starts."""
+    from alox.core.images import ImageStore
+    from alox.functions.services import Circle, Text
+
+    store = ImageStore(keep_results=True)
+    image = np.zeros((40, 60), np.uint8)
+    store.put("highmag", image)
+    store.set_overlay("detectcircle", [Circle(30, 20, 5)])
+    store.set_overlay("highmaginfos", [Text(1, 1, "info")])
+    store.put("highmag", image)                                  # the live display's next image
+    assert store.shapes("detectcircle") and not store.shapes("highmaginfos")
+    store.clear_results()
+    assert not store.shapes("detectcircle")

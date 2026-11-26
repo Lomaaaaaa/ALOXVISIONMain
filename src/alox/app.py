@@ -150,8 +150,11 @@ class Application:
         if config.core:
             folders = resolve_folders(config.setup_ini, config.settings_dir)
             self.core = Core(folders, events=self.events)
-            self.core.images = ImageStore(publish=self.events.publish, profile=self.core.profile_manager,
-                                          has_client=lambda: self.websocket is not None and self.websocket.clients > 0)
+            images = ImageStore(publish=self.events.publish, profile=self.core.profile_manager, keep_results=True,
+                                has_client=lambda: self.websocket is not None and self.websocket.clients > 0)
+            self.core.images = images
+            self.events.on(("function",), lambda e: images.clear_results() if e.topic.endswith(".started")
+                           and not e.topic.startswith("function.get_image.") else None)
             self.core.on_shutdown = self.exit_requested.set
             self.core.boot()                                  # creates alox.ini from alox_default.ini when missing
             if alox_ini is None:

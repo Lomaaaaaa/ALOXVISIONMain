@@ -35,7 +35,10 @@ such property: the Get Image ones (``highmag*``/``lowmag*``) off, as the default
 
 Overlays belong to the image, as NI overlays: a new image (:meth:`ImageStore.put`) starts without overlays (Get Image
 clears the overlay in its loop case 0, ``alox_function_ll_get_image_state_machine d88, d89``), so a function grabs its
-image first, then sets its overlays. ``keep_overlays=True`` keeps them across images instead.
+image first, then sets its overlays. ``keep_overlays=True`` keeps them across images instead. Owner's decision I2 (the
+application's setting, ``keep_results=True``): the result overlays of the functions stay on the following images (the
+live display) until :meth:`ImageStore.clear_results`, called when the next function starts; only the camera overlays
+(:data:`CAMERA_OVERLAYS`, redrawn by Get Image) belong to each image.
 
 JPEG quality: NI's 0..1000 is mapped to Pillow's quality as ``round(q / 10)`` clamped to 1..95 (NI's scale is ten
 times the IJG quality; 750 → 75, Pillow's default; above 95 Pillow disables chroma subsampling and the file grows
@@ -229,6 +232,11 @@ def _truthy(value: Any) -> bool:
 
 
 # ================================================================================================== the manager
+#: The overlays Get Image draws on each image (cleared by every new image).
+CAMERA_OVERLAYS = frozenset({"highmagcamera", "lowmagcamera", "highmaginfos", "lowmaginfos", "highmagscale",
+                             "lowmagscale"})
+
+
 class ImageStore:
     """The image manager (module docstring). Implements :class:`alox.functions.services.ImageSink` (``put``,
     ``last``, ``set_overlay(name, shapes)``, ``clear_overlay``) for the functions and
@@ -242,7 +250,8 @@ class ImageStore:
 
     def __init__(self, *, publish: Publish | None = None, profile: Any = None,
                  has_client: Callable[[], bool] | None = None, stream_interval_s: float = 0.0,
-                 keep_overlays: bool = False, clock: Callable[[], float] = time.time) -> None:
+                 keep_overlays: bool = False, keep_results: bool = False,
+                 clock: Callable[[], float] = time.time) -> None:
         if not (math.isfinite(stream_interval_s) and stream_interval_s >= 0):
             raise ValueError(f"stream_interval_s must be finite and >= 0, got {stream_interval_s!r}")
         self.publish = publish
@@ -250,6 +259,7 @@ class ImageStore:
         self.has_client = has_client
         self.stream_interval_s = float(stream_interval_s)
         self.keep_overlays = keep_overlays
+        self.keep_results = keep_results
         self._clock = clock
         self._lock = threading.Condition()
         self._current: _Current | None = None
@@ -278,8 +288,18 @@ class ImageStore:
             self._info[camera] = (count, float(stamp) if isinstance(stamp, int | float) else self._clock())
             self._last[camera] = pixels
             self._current = _Current(camera, pixels, meta)
-            if not self.keep_overlays:
+            if self.keep_results:
+                for name in [n for n in self._shapes if n in CAMERA_OVERLAYS]:
+                    del self._shapes[name]
+            elif not self.keep_overlays:
                 self._shapes.clear()
+            self._request_frame()
+
+    def clear_results(self) -> None:
+        """Remove the result overlays of the functions (owner I2: when the next function starts)."""
+        with self._lock:
+            for name in [n for n in self._shapes if n not in CAMERA_OVERLAYS]:
+                del self._shapes[name]
             self._request_frame()
 
     def last(self, camera: str) -> np.ndarray | None:
