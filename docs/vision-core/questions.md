@@ -128,10 +128,14 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 |---|---|---|
 | S0 | (not answered yet) | wafer points ZW1, ZW2, ZW3 meanwhile |
 | S1 | "Already in Claude" | Not in the files received (the export's PythonLV folder only has the Hough and correlation scripts): asked again |
-| S2 | Rectangle measure types used: Fit, Surface, vertical y, horizontal x | In progress: measure types HEIGHT_Y and WIDTH_X |
-| S3 | Line: depth only, never median | In progress: measure type DEPTH |
+| S2 | Rectangle measure types used: Fit, Surface, vertical y, horizontal x | Done: measure types HEIGHT_Y, WIDTH_X (side within 45° of the image Y axis = height); Surface = surface-equivalent diameter |
+| S3 | Line: depth only, never median | Done: measure type DEPTH (oxidised depth per side); the Oxyd Target is then a depth; Median stays empty |
 | S4 | (no answer) | 0–360° kept |
 | S5 | Did not understand the question | Re-explained |
-| S6 | The grid can be anything | In progress: hexagonal and oblique lattices; no assumption of rows parallel to the flat |
+| S6 | The grid can be anything | Done: square, rectangular, oblique and hexagonal grids; new recipe key `measure.tilt.latticeangledeg` (the rows' design angle to the wafer X axis, default 0) |
 | S7 | "But why?" | Re-explained |
-| S8 | Go back to the start position | In progress |
+| S8 | Go back to the start position | Done (the position of the start image); a failed return is logged, the tilt is still reported |
+
+Questions raised by this work (for the next round): is "Fit" for rectangles something other than the equivalent
+diameter (it now equals Surface)? JSON names "Depth" / "Height_Y" / "Width_X" in `Type_Measure_Rate`? A recipe whose
+short grid pitch runs perpendicular to the flat needs `latticeangledeg = 90`.
