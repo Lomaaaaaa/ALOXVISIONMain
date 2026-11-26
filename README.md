@@ -338,6 +338,19 @@ opened exclusively).
 `py -3 tools\camera_check.py --fake --actions --yes` rehearses everything on a fake Harvesters stack (two cameras),
 without hardware.
 
+### Check the thermal-map probes
+
+The thermal map (``alox.thermal``: the susceptor temperature map with the Optris pyrometer or the kSA BandiT reading)
+has a read-only probe check. With Alox Vision stopped, on the furnace PC:
+
+```bat
+py -3 tools\thermal_check.py --alox-ini D:\alox\settings\alox.ini
+```
+
+It reads the probe (temperatures, emissivity, serial, and for the pyrometer whether it needs LabVIEW's checksum byte;
+for the BandiT the Modbus registers), changes no setting, and writes `thermal_report_<date>-<time>.json`: send it back.
+`--probe pyro --port COM7` or `--probe bandit --host <ip>` give the probe directly; `--fake` rehearses it.
+
 ### Measure the Fast autofocus latency
 
 The Fast autofocus dates each image by the time it was grabbed, while the image was exposed earlier, which shifts the
