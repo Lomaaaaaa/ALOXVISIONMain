@@ -8,7 +8,7 @@ Command line::
 
     alox [--setup-ini PATH] [--settings-dir DIR] [--alox-ini PATH] [--simulate]
          [--port-map COM2=socket://127.0.0.1:50000] [--no-reference] [--devices z,xy,wl,highmag,lowmag]
-         [--rest-port 8002] [--ws-port 6123] [--host 0.0.0.0] [--no-api]
+         [--rest-port 8002] [--ws-port 6123] [--host 0.0.0.0] [--no-api] [--ui]
          [--log-dir DIR] [--log-level LEVEL] [--check]
 
 Without ``--check`` the whole application runs (folders from ``alox_setup.ini``, settings in ``<settings>/alox.ini``)
@@ -356,6 +356,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--rest-port", type=int, default=8002, help="REST API port (default 8002)")
     p.add_argument("--ws-port", type=int, default=6123, help="websocket events port (default 6123)")
     p.add_argument("--no-api", action="store_true", help="run without the REST and websocket servers")
+    p.add_argument("--ui", action="store_true", help="show the operator window (needs PySide6: pip install -e .[ui])")
     p.add_argument("--check", action="store_true", help="open the devices, print their status as JSON and exit")
     p.add_argument("--version", action="version", version=f"alox {__version__}")
     return p
@@ -412,6 +413,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.check:
             print(json.dumps(app.status(), indent=2))
             return 0 if all(s == DeviceState.READY for s in states.values()) else 1
+        if args.ui:
+            from alox.ui.app import run as run_ui
+
+            log.info("running with the operator window")
+            code = run_ui(app)
+            log.info("stopping")
+            return code
         log.info("running; press Ctrl+C to stop")
         try:
             while not app.exit_requested.wait(0.5):

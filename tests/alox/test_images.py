@@ -331,3 +331,15 @@ def test_result_overlays_stay_on_the_live_images_until_cleared():
     assert store.shapes("detectcircle") and not store.shapes("highmaginfos")
     store.clear_results()
     assert not store.shapes("detectcircle")
+
+
+def test_camera_overlays_of_another_camera_are_not_drawn_on_the_current_image():
+    """Two Get Image runs for different cameras must not overprint their info lines."""
+    from alox.core.images import ImageStore
+    from alox.functions.services import Text
+
+    store = ImageStore(keep_results=True)
+    store.put("lowmag", np.zeros((10, 10), np.uint8))
+    store.set_overlay("highmaginfos", [Text(1, 1, "late")])          # from an earlier High Mag image
+    store.set_overlay("lowmaginfos", [Text(1, 1, "now")])
+    assert not store.shapes("highmaginfos") and store.shapes("lowmaginfos")

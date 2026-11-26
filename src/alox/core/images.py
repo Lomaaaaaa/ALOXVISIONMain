@@ -147,10 +147,20 @@ def to_display(pixels: np.ndarray) -> Image.Image:
     raise ValueError(f"not an image: shape {arr.shape}")
 
 
+#: Fonts tried first for the overlay texts: they have "µ" (Pillow's built-in font draws it as "?"). Windows, Linux.
+FONT_FILES = ("arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf")
+
+
 @lru_cache(maxsize=16)
 def _font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
+    size = max(1, int(size))
+    for name in FONT_FILES:
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
     try:
-        return ImageFont.load_default(size=max(1, int(size)))
+        return ImageFont.load_default(size=size)
     except TypeError:                                   # Pillow < 10.1: the fixed bitmap font
         return ImageFont.load_default()
 
@@ -313,6 +323,9 @@ class ImageStore:
             if not isinstance(shape, Line | Circle | Rect | Points | Text):
                 raise TypeError(f"overlay {name!r}: not a shape: {shape!r}")
         with self._lock:
+            current = self._current
+            if name in CAMERA_OVERLAYS and current is not None and not name.startswith(current.camera):
+                return                       # a late overlay of the other camera's image: not for the current one
             self._shapes[name] = items
             self._request_frame()
 

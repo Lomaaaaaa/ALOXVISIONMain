@@ -43,6 +43,8 @@ alox --simulate --setup-ini D:\alox\alox_setup.ini
 - `--rest-port`, `--ws-port`, `--host` and `--no-api` set the API; the application runs until Ctrl+C or the
   supervisor's `PUT /alox/v1/system/shutdown`.
 - `alox --simulate --check` only opens the devices, prints their status as JSON and exits (0 when all are ready).
+- `--ui` shows the operator window (PySide6: `pip install -e ".[ui]"`); `python -m alox.ui --simulate` is the same on
+  simulated devices with temporary folders.
 
 ### Licence
 
