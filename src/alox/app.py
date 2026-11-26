@@ -65,8 +65,10 @@ log = logging.getLogger("alox")
 @dataclass(frozen=True)
 class AppConfig:
     """What the application needs to start. ``alox_ini`` None = built-in defaults. ``devices`` selects the devices to
-    build (``z``, ``xy``, ``wl`` (monochromator), ``highmag``, ``lowmag``); ``genicam_producer`` is the GenTL producer (``.cti``) of the camera
-    SDK for the real cameras.
+    build (``z``, ``xy``, ``wl`` (monochromator), ``highmag``, ``lowmag``); ``genicam_producer`` holds the GenTL
+    producers (``.cti``) of the camera SDK for the real cameras: GigE Vision and/or USB3 Vision (owner H4); empty = the
+    producers of ``GENICAM_GENTL64_PATH``. The cameras are found by their user-defined name (owner B12: ``HighMag``,
+    ``LowMag``, the ``name_STR`` of ``alox.ini``), serial number as fallback.
 
     ``core`` runs the core and (``api``) the supervisor API: the folders come from ``setup_ini`` (default
     ``<exe>/alox_setup.ini``), ``settings_dir`` replaces ``[folders] settings``, and ``alox_ini`` defaults to
@@ -78,7 +80,7 @@ class AppConfig:
     always_reference: bool = True
     open_timeout_s: float | None = None
     devices: tuple[str, ...] = ("z", "xy", "wl", "highmag", "lowmag")
-    genicam_producer: Path | None = None
+    genicam_producer: tuple[Path, ...] = ()
     core: bool = False
     setup_ini: Path | None = None
     settings_dir: Path | None = None
@@ -220,7 +222,7 @@ class Application:
             else:
                 try:
                     from alox.devices.camera_genicam import GenICamBackend
-                    self._camera_backend = GenICamBackend(self.config.genicam_producer)
+                    self._camera_backend = GenICamBackend(list(self.config.genicam_producer) or None)
                 except Exception as exc:                     # noqa: BLE001 - reported by the cameras' open
                     log.error("camera driver unavailable: %s", exc)
                     self._camera_backend = _UnavailableCameras(str(exc))
@@ -342,7 +344,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="do not force a reference move at set-up when the axis is already referenced")
     p.add_argument("--devices", default="z,xy,wl,highmag,lowmag",
                    help="comma-separated devices to use (default: z,xy,wl,highmag,lowmag)")
-    p.add_argument("--genicam-producer", type=Path, help="GenTL producer (.cti) of the camera SDK (real cameras)")
+    p.add_argument("--genicam-producer", type=Path, action="append", default=[],
+                   help="GenTL producer (.cti) of the camera SDK, repeatable for GigE and USB cameras "
+                        "(default: the producers of GENICAM_GENTL64_PATH)")
     p.add_argument("--log-dir", type=Path, help="also write the log to daily files in this folder")
     p.add_argument("--log-level", default="INFO", help="DEBUG, INFO, WARNING, ERROR (default INFO)")
     p.add_argument("--host", default="0.0.0.0", help="address the API listens on (default 0.0.0.0)")
@@ -386,7 +390,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _setup_logging(args.log_level, args.log_dir)
     devices = tuple(d.strip().lower() for d in args.devices.split(",") if d.strip())
     config = AppConfig(alox_ini=args.alox_ini, simulate=args.simulate, port_map=_port_map(args.port_map),
-                       devices=devices, genicam_producer=args.genicam_producer, core=not args.check,
+                       devices=devices, genicam_producer=tuple(args.genicam_producer), core=not args.check,
                        setup_ini=args.setup_ini, settings_dir=args.settings_dir, api=not args.no_api,
                        host=args.host, rest_port=args.rest_port, ws_port=args.ws_port)
     if args.no_reference:
