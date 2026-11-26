@@ -28,6 +28,9 @@ class FakeProperties:
     def set(self, dotted: str, value: Any) -> None:
         self.values[dotted] = value
 
+    def exists(self, dotted: str) -> bool:
+        return dotted in self.values
+
 
 def b64(text: str) -> str:
     return base64.b64encode(text.encode("cp1252")).decode("ascii")
@@ -105,13 +108,14 @@ def test_check_password_does_not_change_the_user(props: FakeProperties):
     assert users.current is UserType.OPERATOR
 
 
-def test_empty_or_missing_password_property_is_the_empty_password(props: FakeProperties):
+def test_empty_password_property_is_the_empty_password_but_a_missing_one_refuses_all(props: FakeProperties):
     props.set("user.password.operator", "")
     users = Users(props)
     assert users.check_password(UserType.OPERATOR, "") is True
     assert users.check_password(UserType.OPERATOR, "x") is False
-    del props.values["user.password.operator"]
-    assert users.check_password(UserType.OPERATOR, "") is True
+    del props.values["user.password.administrator"]
+    assert users.check_password(UserType.ADMIN, "") is False          # fixed: LabVIEW let anyone in
+    assert users.login(UserType.ADMIN, "") is False
 
 
 def test_invalid_base64_never_matches(props: FakeProperties):

@@ -220,7 +220,10 @@ class PasswordStore(Protocol):
 
 class Base64PasswordStore:
     """Today's storage: ``user.password.<operator|engineer|administrator>`` holds the Base64 of the password (an empty
-    property is the empty password). Base64 is an encoding, not a protection (map Part 1 §8 note 9)."""
+    property is the empty password). Base64 is an encoding, not a protection (map Part 1 §8 note 9).
+
+    Fixed: a *missing* property refuses every password (LabVIEW read it as the empty password, so a settings file
+    without the password section let anyone log in as Engineer or Administrator with an empty password)."""
 
     def __init__(self, properties: Properties) -> None:
         self._properties = properties
@@ -230,6 +233,9 @@ class Base64PasswordStore:
         return f"user.password.{UserType(user).password_key}"
 
     def _stored(self, user: UserType) -> bytes | None:
+        if not self._properties.exists(self.key(user)):
+            log.warning("property %s is missing: no password can match it", self.key(user))
+            return None
         raw = self._properties.get(self.key(user), "")
         text = "" if raw is None else str(raw).strip()
         try:
