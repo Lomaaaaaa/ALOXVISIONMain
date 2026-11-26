@@ -42,8 +42,13 @@ def _focus(kind: str) -> Callable[[Services], MeasurementFunction]:
         cameras = {key: camera for key, camera in found.items() if camera is not None}
         if not cameras:
             raise LookupError("no camera")
-        cls = Autofocus if kind == "autofocus" else Refocus
-        return cls(services.device("z"), cameras)
+        if kind == "autofocus":
+            from alox.functions.af_latency import LATENCY_SETTING
+            from alox.functions.focus import FocusOptions
+
+            latency = float(services.settings.get(LATENCY_SETTING, 0.0) or 0.0)       # owner B8, measured on site
+            return Autofocus(services.device("z"), cameras, options=FocusOptions(fast_latency_s=max(0.0, latency)))
+        return Refocus(services.device("z"), cameras)
     return build
 
 

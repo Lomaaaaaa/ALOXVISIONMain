@@ -329,6 +329,21 @@ opened exclusively).
 `py -3 tools\camera_check.py --fake --actions --yes` rehearses everything on a fake Harvesters stack (two cameras),
 without hardware.
 
+### Measure the Fast autofocus latency
+
+The Fast autofocus dates each image by the time it was grabbed, while the image was exposed earlier, which shifts the
+best Z. `tools/af_latency_check.py` measures that latency by comparing a Slow and a Fast autofocus on the same sample
+(the method and the procedure are in the tool's help). With Alox Vision stopped and a sharp sample under the camera,
+roughly in focus:
+
+```bat
+py -3 tools\af_latency_check.py --alox-ini D:\alox\settings\alox.ini --camera highmag --z-min 4.8 --z-max 5.2
+```
+
+Nothing moves before a typed `yes`. Copy the printed `fastaflatency_DBL = …` line into `alox.ini` under
+`[hardware.z]` and send back the `af_latency_report_<date>-<time>.json` file. `--simulate --yes` rehearses it without
+hardware.
+
 ### Rehearsal with the fake controller
 
 `aloxcam.zstage.fake_c663` emulates a C-663 on a TCP port (the simulated stage behind the real serial protocol). It
