@@ -49,3 +49,25 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 | H4 | Cameras: results of `tools/camera_check.py` on each camera (feature names, jumbo frames, I/O line values, producer path) | IDS GigE, Mono8 | camera_genicam.py |
 | D2 | Stage directions (coordinate system #4), chuck origin, `xaxis_I32` (1 or 10) on each tool: a complete `alox.ini` of a machine (without passwords) answers it | INI values | xy-stage.md Q9, Q10 |
 | D3 | A real recipe `.zip` and the `alox.ini` / `alox_setup.ini` of a machine (owner will forward them) | format and layout as read in the diagrams | core/profiles.py, core/folders.py |
+
+## Round 2 (asked 2026-11-26, from the measurement functions)
+
+| # | Question | Default meanwhile | Source |
+|---|---|---|---|
+| R1 | Bowing "Fast" method always ends in Error in V1.2.6.2: what should it produce? | ends in Error | functions/bowing.py |
+| R2 | End of bowing: wavelength to `wavelength.wlmanual` (LabVIEW) or the initial one? | `wlmanual` | functions/bowing.py |
+| R3 | `bowing_en.lang` autofocus error texts 1012–1019 in another point order than the codes: correct the texts? | texts to correct | functions/bowing.py |
+| R4 | Search Object "Found Object?" compares a 0–1000 score with a % (always true): compare properly? | as LabVIEW | functions/search_object.py |
+| R5 | Search Object refocus retries: 5 (wiring) or 3 (comment)? | 5 | functions/search_object.py |
+| R6 | Search Object Offset X/Y in stage coordinates? | stage coordinates | functions/search_object.py |
+| R7 | Search Object refuses to start when the monochromator is down? | kept | functions/search_object.py |
+| R8 | Detection methods used in production (Shape / Blobs / Object learning; Mesa Shape Line or Rectangle; rotation)? | Shape and Blobs | functions/detect_circle.py |
+| R9 | Did Refocus Oxyd ever work (empty ROI in the camera server)? New: the ring's bounding square | new behaviour | functions/refocus_oxyd.py |
+| R10 | Recipe values of `measure.vcsel.maxMesaDiam` (default 0) and `tracking.diameter` (0.2) | recipe values | functions/measure_oxyd.py, tracking.py |
+| R11 | Auto Exposure `bypassCircleIn` TRUE measures inside the circle in the diagram: intended? | as the diagram | functions/auto_exposure.py |
+| R12 | Auto Exposure brightness line through (0, 0) with measure 2 only: use both measures? | as LabVIEW | functions/auto_exposure.py |
+| R13 | Search Wavelength with no table wavelength in [Start, End]? | nearest table wavelength | functions/search_wavelength.py |
+| R14 | Are the `.ae` / `.wal` files read by other tools or people? | kept | functions/auto_exposure.py |
+| R15 | Get Image digital Gain ever ≠ 1? | 1 | functions/get_image.py |
+| R16 | Recorded images with LabVIEW's results (Search Object, measure_mesa) and recipe model/mask PNGs, to validate the image algorithms | synthetic tests only | vision/edges.py, matching.py |
+| R17 | NI Vision run-time licence kept on the machines, and `nivision.h`, to finish the exact NI pattern matcher? | OpenCV matcher | vision/matching.py |
