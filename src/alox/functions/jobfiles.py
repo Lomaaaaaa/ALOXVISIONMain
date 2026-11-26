@@ -158,7 +158,7 @@ def job_history_root(folders: Any, job: JobInfo | None) -> Path:
 
 @dataclass(frozen=True)
 class JobFolders:
-    """The folders of one job: ``root``, ``images`` (``<root>\images\<x>``, None when not asked), ``files``
+    r"""The folders of one job: ``root``, ``images`` (``<root>\images\<x>``, None when not asked), ``files``
     (``<root>\files``) and the requested ``files`` sub-folders by name."""
 
     root: Path
@@ -172,7 +172,7 @@ class JobFolders:
 
 def job_folders(folders: Any, job: JobInfo | None, *, images: str | None = None, files: Sequence[str] = (),
                 create: bool = True) -> JobFolders:
-    """``tools_alox_shared_jobhistory_folder_<x>_path``: the job tree with ``images\\<images>`` and ``files\\<f>`` for
+    r"""``tools_alox_shared_jobhistory_folder_<x>_path``: the job tree with ``images\<images>`` and ``files\<f>`` for
     each name of ``files`` (bowing: ``images="bowing", files=("bowing",)``). ``create`` makes the folders that are
     returned (:class:`OSError` when one cannot be created)."""
     root = job_history_root(folders, job)
