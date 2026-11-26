@@ -11,7 +11,8 @@ To show the UI from ``alox.app.main`` (not changed here), replace its wait loop,
         from alox.ui.app import run
         return run(app)
 
-``python -m alox.ui --simulate`` does exactly that with every device simulated.
+``python -m alox.ui --simulate`` does exactly that with every device simulated; ``--theme light|dark`` chooses the
+look (:mod:`alox.ui.theme`; default: the operator's last choice, remembered in the user settings, else light).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from typing import Any
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
+from alox.ui import theme as themes
 from alox.ui.controller import Controller
 from alox.ui.window import MainWindow
 
@@ -52,9 +54,11 @@ def create_window(application: Any, **kwargs: Any) -> MainWindow:
     return MainWindow(controller, **kwargs)
 
 
-def run(application: Any, *, argv: Sequence[str] | None = None) -> int:
-    """Show the window and run the event loop (module docstring); returns the Qt exit code."""
+def run(application: Any, *, argv: Sequence[str] | None = None, theme: str | None = None) -> int:
+    """Show the window and run the event loop (module docstring); returns the Qt exit code. ``theme``: ``light`` or
+    ``dark`` (None: the user's last choice)."""
     app = _qapp(argv)
+    themes.apply(app, theme)
     window = create_window(application)
     window.resize(1600, 900)
     window.show()
@@ -78,10 +82,10 @@ def run(application: Any, *, argv: Sequence[str] | None = None) -> int:
 
 
 def screenshot(application: Any, path: str | Path, *, size: tuple[int, int] = (1600, 900),
-               wait_image_s: float = 10.0) -> Path:
+               wait_image_s: float = 10.0, theme: str | None = None) -> Path:
     """Render the window of ``application`` to a PNG (offscreen use: documentation, reviews); waits up to
-    ``wait_image_s`` for the first image of the display."""
-    _qapp()
+    ``wait_image_s`` for the first image of the display. ``theme`` as :func:`run`."""
+    themes.apply(_qapp(), theme)
     window = create_window(application)
     try:
         window.resize(*size)
@@ -116,6 +120,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--rest-port", type=int, default=8002, help="REST API port (default 8002)")
     p.add_argument("--ws-port", type=int, default=6123, help="websocket events port (default 6123)")
     p.add_argument("--host", default="0.0.0.0", help="address the API listens on (default 0.0.0.0)")
+    p.add_argument("--theme", choices=tuple(themes.THEMES), help="light or dark (default: the last one chosen)")
     p.add_argument("--screenshot", type=Path, help="render the window to this PNG and exit")
     p.add_argument("--log-level", default="INFO", help="DEBUG, INFO, WARNING, ERROR (default INFO)")
     return p
@@ -134,7 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     with Application(config) as application:
         application.start()
         if args.screenshot is not None:
-            screenshot(application, args.screenshot)
+            screenshot(application, args.screenshot, theme=args.theme)
             print(args.screenshot)
             return 0
-        return run(application)
+        return run(application, theme=args.theme)

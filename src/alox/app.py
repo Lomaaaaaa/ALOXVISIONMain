@@ -367,6 +367,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--ws-port", type=int, default=6123, help="websocket events port (default 6123)")
     p.add_argument("--no-api", action="store_true", help="run without the REST and websocket servers")
     p.add_argument("--ui", action="store_true", help="show the operator window (needs PySide6: pip install -e .[ui])")
+    p.add_argument("--theme", choices=("light", "dark"), help="with --ui: the window theme (default: the last chosen)")
     p.add_argument("--check", action="store_true", help="open the devices, print their status as JSON and exit")
     p.add_argument("--version", action="version", version=f"alox {__version__}")
     return p
@@ -427,7 +428,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             from alox.ui.app import run as run_ui
 
             log.info("running with the operator window")
-            code = run_ui(app)
+            code = run_ui(app, theme=args.theme)
             log.info("stopping")
             return code
         log.info("running; press Ctrl+C to stop")

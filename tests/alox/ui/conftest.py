@@ -154,6 +154,19 @@ def wait_until(predicate: Callable[[], bool], timeout: float = 5.0) -> None:
         time.sleep(0.01)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def user_settings_dir(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path | None]:
+    """The window's user settings (``QSettings``: the theme) in a temporary folder, never the tester's."""
+    try:
+        from PySide6.QtCore import QSettings
+    except ImportError:
+        yield None
+        return
+    folder = tmp_path_factory.mktemp("user-settings")
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(folder))
+    yield folder
+
+
 @pytest.fixture
 def core(tmp_path: Path) -> Iterator[Core]:
     c = Core(make_folders(tmp_path), config=CoreConfig(hostname="alox-pc", supervise_hardware=False,

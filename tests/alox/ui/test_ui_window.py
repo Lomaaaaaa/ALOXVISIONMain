@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication
 from alox.core.core import Core
 from alox.core.functions import FunctionName
 from alox.events import Event
+from alox.ui import theme
 from alox.ui.controller import ROWS, Controller, Tab
 from alox.ui.window import MainWindow
 
@@ -45,6 +46,12 @@ def pump(window: MainWindow, predicate: Callable[[], bool], timeout: float = 5.0
         time.sleep(0.01)
 
 
+def badge_shown(indicator: Any) -> tuple[str, str]:
+    """The badge of a status indicator: its style key and the colour drawn inside its left edge."""
+    image = indicator.grab().toImage()
+    return indicator.property("status"), image.pixelColor(4, image.height() // 2).name()
+
+
 def probe(core: Core, fakes: SimpleNamespace, name: FunctionName) -> Any:
     found = fakes.Probe(name)
     core.functions.register(found)
@@ -68,15 +75,17 @@ def test_a_status_event_updates_the_indicator(window: MainWindow, core: Core, fa
     af = probe(core, fakes, FunctionName.AUTOFOCUS_LARGE)
     window.refresh_functions()
     indicator = window.indicators["AF"]
-    assert indicator.text() == "OFF OK" and "transparent" in indicator.styleSheet()
+    assert indicator.text() == "OFF OK" and badge_shown(indicator) == ("off-ok", theme.current().off_ok.background)
     worker = threading.Thread(target=core.functions.start, args=(FunctionName.AUTOFOCUS_LARGE,))
     worker.start()                                                   # the event comes from another thread
     worker.join()
     pump(window, lambda: indicator.text() == "RUNNING")
-    assert "#ffff00" in indicator.styleSheet() and not window.start_buttons["AF_RUN_BTN"].isEnabled()
+    assert badge_shown(indicator) == ("running", theme.current().running.background)
+    assert not window.start_buttons["AF_RUN_BTN"].isEnabled()
     af.release.set()
     pump(window, lambda: indicator.text() == "FINISHED")
-    assert "#66ff00" in indicator.styleSheet() and window.start_buttons["AF_RUN_BTN"].isEnabled()
+    assert badge_shown(indicator) == ("finished", theme.current().finished.background)
+    assert window.start_buttons["AF_RUN_BTN"].isEnabled()
 
 
 def test_a_start_button_starts_the_function_and_stop_stops_it(window: MainWindow, core: Core,
@@ -129,3 +138,28 @@ def test_exit_and_show_ui(window: MainWindow, core: Core):
     pump(window, asked.is_set)
     core.events.publish(Event("core.show_ui", "core", {"visible": False}))
     pump(window, lambda: not window.isVisible())
+
+
+def test_the_theme_toggle_restyles_the_window_and_is_remembered(window: MainWindow, core: Core,
+                                                                 fakes: SimpleNamespace):
+    probe(core, fakes, FunctionName.AUTOFOCUS_LARGE)
+    window.set_theme("light")
+    window.refresh_functions()
+    indicator = window.indicators["AF"]
+    assert badge_shown(indicator) == ("off-ok", theme.LIGHT.off_ok.background)
+    assert not window.theme_action.isChecked()
+
+    def centre(button: Any) -> str:
+        return button.icon().pixmap(24, 24).toImage().pixelColor(12, 12).name()
+
+    assert centre(window.stop_buttons["AF"]) == theme.LIGHT.danger
+    window.theme_action.trigger()                                        # the tool bar toggle
+    assert theme.current() is theme.DARK and theme.saved() == "dark" and window.theme_action.isChecked()
+    assert QApplication.instance().styleSheet() == theme.style_sheet(theme.DARK)
+    assert badge_shown(indicator) == ("off-ok", theme.DARK.off_ok.background)
+    assert centre(window.stop_buttons["AF"]) == theme.DARK.danger           # icons re-made in the theme
+    assert centre(window.start_buttons["AF_RUN_BTN"]) == theme.DARK.accent
+    assert window.view.backgroundBrush().color().name() == theme.DARK.image
+    window.theme_action.trigger()
+    assert theme.current() is theme.LIGHT and theme.saved() == "light"
+    assert badge_shown(indicator)[1] == theme.LIGHT.off_ok.background

@@ -7,6 +7,8 @@
   satisfied by :class:`alox.core.images.ImageStore`, the parameters of a local start, the wafer/stage conversion).
 - :mod:`alox.ui.bridge`, :mod:`alox.ui.widgets`, :mod:`alox.ui.window`: the Qt side (events queued to the UI
   thread, blocking calls in workers).
+- :mod:`alox.ui.theme`, :mod:`alox.ui.icons`: the look (light and dark themes as palette tokens and one style sheet,
+  the icons drawn in code).
 - :mod:`alox.ui.app`: :func:`alox.ui.app.run` shows the window for a started :class:`alox.app.Application`;
   ``python -m alox.ui --simulate`` runs the simulated application with it.
 

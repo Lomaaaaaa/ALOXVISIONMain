@@ -6,6 +6,10 @@ WAVELENGTH, the status field and THERMAL MEASUREMENT under it; on the right IMAG
 high-level function rows, the camera selector, the joysticks and F (ms), VISION PROFILE, then the SETTINGS /
 LOW-LEVEL MEASUREMENTS / HIGH-LEVEL MEASUREMENTS tabs.
 
+Look (:mod:`alox.ui.theme`): the panels are cards on the window background, the function rows a grid with aligned
+columns (name, start buttons, stop, settings, status badge), the icons drawn by :mod:`alox.ui.icons` in the theme's
+colours; the tool bar's "Dark theme" toggle switches the light / dark theme at run time and remembers it for the user.
+
 Threads: bus events arrive through :class:`alox.ui.bridge.EventBridge` (queued to the UI thread); every click that
 may block (devices, a function's stop) runs in the actions worker; the producer's ``Timeout`` refresh
 (:meth:`Controller.poll`, every ``general.displaytimer`` ms) in the poll worker; the image (``merged()``) is rendered
@@ -34,9 +38,11 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QMainWindow,
@@ -44,7 +50,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
-    QStyle,
     QTabWidget,
     QToolBar,
     QToolButton,
@@ -54,6 +59,7 @@ from PySide6.QtWidgets import (
 
 from alox.api.backend import Measure
 from alox.core.functions import FunctionName
+from alox.ui import icons, theme
 from alox.ui.adapters import image_key
 from alox.ui.bridge import EventBridge, Worker, to_qimage
 from alox.ui.controller import (
@@ -88,24 +94,43 @@ NEXT_STEPS = (
     "Optical viewfinder, thermal measurement (if kept in scope), about box details, translations of the labels",
 )
 
-_NAME_STYLE = ("QLabel { background: #f4f4f4; border: 1px solid #9a9a9a; padding: 2px 6px; }")
-_STOP_STYLE = "QToolButton { color: #e00000; font-size: 15px; }"
-_HEADER_FONT = QFont("DejaVu Sans", 9, QFont.Weight.Bold)
+_GAP = 8                  # between the panels
+_CONTROL_H = 28           # height of the buttons of the function rows
+_NAME_W = 112             # width of the function names
 
 
-def _header(text: str) -> QLabel:
+def _label(text: str, role: str) -> QLabel:
     label = QLabel(text)
-    label.setFont(_HEADER_FONT)
+    label.setProperty("role", role)
     return label
 
 
+def _section_label(text: str) -> QLabel:
+    label = _label(text.upper(), "section")
+    font = QFont(label.font())
+    font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.6)
+    label.setFont(font)
+    return label
+
+
+def _card(layout: QLayout, margins: tuple[int, int, int, int] = (10, 8, 10, 10)) -> QFrame:
+    """A panel holding ``layout``."""
+    frame = QFrame()
+    frame.setProperty("card", True)
+    layout.setContentsMargins(*margins)
+    frame.setLayout(layout)
+    return frame
+
+
 class MainWindow(QMainWindow):
-    """The window. ``confirm(question) -> bool`` asks the operator (default: a Yes/No box; tests pass a stub)."""
+    """The window. ``confirm(question) -> bool`` asks the operator (default: a Yes/No box; tests pass a stub).
+    ``theme_name`` installs that theme (:mod:`alox.ui.theme`; default: the one installed, else the user's)."""
 
     IMAGE_INTERVAL_MS = 100
 
     def __init__(self, controller: Controller, *, confirm: Callable[[str], bool] | None = None,
-                 poll_interval_ms: int | None = None, parent: QWidget | None = None) -> None:
+                 poll_interval_ms: int | None = None, theme_name: str | None = None,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.controller = controller
         self.confirm = confirm or self._ask
@@ -123,15 +148,21 @@ class MainWindow(QMainWindow):
         self.log_window: LogWindow | None = None
         self.settings_panel: SettingsPanel | None = None
 
+        self._themed_icons: list[tuple[Any, str, str]] = []
+        if theme_name is not None or not theme.applied():
+            theme.apply(None, theme_name)
+
         self.setWindowTitle(controller.title())
         self._build_toolbar()
         central = QWidget()
         layout = QHBoxLayout(central)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(_GAP, _GAP, _GAP, _GAP)
+        layout.setSpacing(_GAP)
         layout.addWidget(self._build_left(), 11)
         layout.addWidget(self._build_right(), 9)
         self.setCentralWidget(central)
         self._build_statusbar()
+        self.apply_theme()
 
         self.bridge = EventBridge(controller.core.events, TOPICS, self)
         self.bridge.event.connect(self.on_event)
@@ -153,11 +184,15 @@ class MainWindow(QMainWindow):
             return 1000
 
     # ============================================================================================== building
-    def _icon_action(self, bar: QToolBar, text: str, icon: QStyle.StandardPixmap | None,
-                     slot: Callable[[], None]) -> QAction:
+    def _themed(self, target: Any, name: str, colour: str = "text") -> None:
+        """Give ``target`` (a QAction or a button) the icon ``name`` in the theme colour ``colour``, now and after
+        each theme change."""
+        self._themed_icons.append((target, name, colour))
+        target.setIcon(icons.icon(name, getattr(theme.current(), colour)))
+
+    def _icon_action(self, bar: QToolBar, text: str, icon: str, slot: Callable[[], None]) -> QAction:
         action = QAction(text, self)
-        if icon is not None:
-            action.setIcon(self.style().standardIcon(icon))
+        self._themed(action, icon)
         action.setToolTip(text)
         action.triggered.connect(slot)
         bar.addAction(action)
@@ -166,25 +201,32 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         bar = QToolBar("main", self)
         bar.setMovable(False)
-        bar.setIconSize(QSize(22, 22))
+        bar.setIconSize(QSize(20, 20))
         bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        sp = QStyle.StandardPixmap
-        self.viewfinder_action = self._icon_action(bar, "Viewfinder", sp.SP_FileDialogContentsView, lambda: None)
+        self.viewfinder_action = self._icon_action(bar, "Viewfinder", "eye", lambda: None)
         self.viewfinder_action.setEnabled(False)
         self.viewfinder_action.setToolTip("OPTICAL VIEWFINDER (not ported yet)")
-        self.save_action = self._icon_action(bar, "Save", sp.SP_DialogSaveButton, self.save_image)
-        self.user_action = self._icon_action(bar, "User", sp.SP_DirHomeIcon, self.login)
-        self.settings_action = self._icon_action(bar, "Settings", sp.SP_FileDialogDetailedView, self.open_settings)
-        self.log_action = self._icon_action(bar, "Log", sp.SP_FileDialogListView, self.show_log)
-        self.about_action = self._icon_action(bar, "About", sp.SP_MessageBoxQuestion, self.about)
-        self.exit_action = self._icon_action(bar, "Exit", sp.SP_DialogCloseButton, self.exit)
+        self.save_action = self._icon_action(bar, "Save", "save", self.save_image)
+        self.user_action = self._icon_action(bar, "User", "user", self.login)
+        self.settings_action = self._icon_action(bar, "Settings", "sliders", self.open_settings)
+        self.log_action = self._icon_action(bar, "Log", "log", self.show_log)
+        self.about_action = self._icon_action(bar, "About", "info", self.about)
+        self.exit_action = self._icon_action(bar, "Exit", "power", self.exit)
         bar.addSeparator()
         self.alarm = QLineEdit()
         self.alarm.setReadOnly(True)
         self.alarm.setPlaceholderText("ALARM")
         self.alarm.setMinimumWidth(300)
+        self.alarm.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         bar.addWidget(self.alarm)
-        self.clear_alarm_action = self._icon_action(bar, "Clear alarm", sp.SP_BrowserReload, self.clear_alarm)
+        self.clear_alarm_action = self._icon_action(bar, "Clear alarm", "bell-off", self.clear_alarm)
+        bar.addSeparator()
+        self.theme_action = QAction("Dark theme", self)
+        self.theme_action.setCheckable(True)
+        self.theme_action.setToolTip("Dark theme (darkened room); remembered for this user")
+        self._themed(self.theme_action, "moon")
+        self.theme_action.toggled.connect(lambda on: self.set_theme(theme.DARK if on else theme.LIGHT))
+        bar.addAction(self.theme_action)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
         self.toolbar = bar
 
@@ -192,78 +234,84 @@ class MainWindow(QMainWindow):
         left = QWidget()
         column = QVBoxLayout(left)
         column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(_GAP)
         display = QHBoxLayout()
+        display.setSpacing(8)
         palette = QVBoxLayout()
+        palette.setSpacing(6)
         self.view = ImageView()
         self.view.info.connect(lambda text: self.statusBar().showMessage(text, 10000))
         group = QActionGroup(self)
         self.tool_buttons: dict[Tool, QToolButton] = {}
-        for tool, glyph in ((Tool.ZOOM, "🔍"), (Tool.PAN, "✋"), (Tool.POINT, "+"), (Tool.LINE, "╱"),
-                            (Tool.RECT, "▭")):
-            action = QAction(glyph, self)
+        for tool, icon in ((Tool.ZOOM, "zoom"), (Tool.PAN, "pan"), (Tool.POINT, "point"), (Tool.LINE, "line"),
+                           (Tool.RECT, "rect")):
+            action = QAction(tool.label, self)
             action.setCheckable(True)
             action.setToolTip(tool.label)
             action.setChecked(tool is self.view.tool)
             action.triggered.connect(lambda _checked=False, t=tool: self.view.set_tool(t))
+            self._themed(action, icon)
             group.addAction(action)
             button = QToolButton()
             button.setDefaultAction(action)
-            button.setFixedSize(30, 28)
+            button.setFixedSize(_CONTROL_H + 4, _CONTROL_H + 4)
+            button.setIconSize(QSize(20, 20))
             palette.addWidget(button)
             self.tool_buttons[tool] = button
-        palette.addSpacing(18)
+        palette.addSpacing(14)
         self.zoom_fit_button = QToolButton()
-        self.zoom_fit_button.setText("⤢")
+        self.zoom_fit_button.setText("ZOOM FIT")
         self.zoom_fit_button.setToolTip("ZOOM FIT")
-        self.zoom_fit_button.setFixedSize(30, 28)
+        self.zoom_fit_button.setFixedSize(_CONTROL_H + 4, _CONTROL_H + 4)
+        self.zoom_fit_button.setIconSize(QSize(20, 20))
+        self._themed(self.zoom_fit_button, "fit")
         self.zoom_fit_button.clicked.connect(self.view.zoom_fit)
         palette.addWidget(self.zoom_fit_button)
         palette.addStretch(1)
         display.addLayout(palette)
         display.addWidget(self.view, 1)
-        column.addLayout(display, 1)
-        column.addLayout(self._build_bottom())
+        column.addWidget(_card(display, (8, 8, 8, 8)), 1)
+        column.addWidget(self._build_bottom())
         return left
 
-    def _build_bottom(self) -> QHBoxLayout:
-        bottom = QHBoxLayout()
-        moves = QGridLayout()
+    def _build_bottom(self) -> QFrame:
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(8)
         self.x_ctrl, self.y_ctrl = QDoubleSpinBox(), QDoubleSpinBox()
         self.move_x, self.move_y = QPushButton("MOVE X"), QPushButton("MOVE Y")
-        for row, (name, spin, button, axis) in enumerate((("X (mm):", self.x_ctrl, self.move_x, "x"),
-                                                          ("Y (mm):", self.y_ctrl, self.move_y, "y"))):
+        for row, (name, spin, button, axis) in enumerate((("X (mm)", self.x_ctrl, self.move_x, "x"),
+                                                          ("Y (mm)", self.y_ctrl, self.move_y, "y"))):
             spin.setRange(-500.0, 500.0)
             spin.setDecimals(6)
             spin.setSingleStep(0.1)
-            spin.setFixedWidth(110)
+            spin.setFixedWidth(112)
+            spin.setAlignment(Qt.AlignmentFlag.AlignRight)
             button.clicked.connect(lambda _c=False, a=axis: self.move(a))
-            moves.addWidget(QLabel(name), row, 0)
-            moves.addWidget(spin, row, 1)
-            moves.addWidget(button, row, 2)
-        bottom.addLayout(moves)
-        wl = QVBoxLayout()
+            grid.addWidget(_label(name, "field"), row, 0)
+            grid.addWidget(spin, row, 1)
+            grid.addWidget(button, row, 2)
+        grid.setColumnMinimumWidth(3, 4)
         self.wl_ctrl = QSpinBox()
         self.wl_ctrl.setRange(0, 2000)
         self.wl_ctrl.setSuffix(" nm")
-        self.wl_ctrl.setFixedWidth(130)
+        self.wl_ctrl.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.set_wl = QPushButton("SET WAVELENGTH")
         self.set_wl.clicked.connect(self.set_wavelength)
-        wl.addWidget(self.wl_ctrl)
-        wl.addWidget(self.set_wl)
-        bottom.addLayout(wl)
-        status = QVBoxLayout()
+        grid.addWidget(self.wl_ctrl, 0, 4)
+        grid.addWidget(self.set_wl, 1, 4)
+        grid.setColumnMinimumWidth(5, 4)
         self.status_field = QLineEdit()
         self.status_field.setReadOnly(True)
-        status.addWidget(self.status_field)
-        thermal = QHBoxLayout()
+        self.status_field.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.status_field.setToolTip("System status")
+        grid.addWidget(self.status_field, 0, 6)
         self.thermal = QPushButton("THERMAL MEASUREMENT")
         self.thermal.setEnabled(False)
         self.thermal.setToolTip("Thermal measurement: not ported (scope to confirm)")
-        thermal.addWidget(self.thermal)
-        thermal.addStretch(1)
-        status.addLayout(thermal)
-        bottom.addLayout(status, 1)
-        return bottom
+        grid.addWidget(self.thermal, 1, 6, Qt.AlignmentFlag.AlignLeft)
+        grid.setColumnStretch(6, 1)
+        return _card(grid)
 
     def _function_rows(self, grid: QGridLayout, start: int, rows: list[FunctionRow]) -> int:
         """Lay the rows out: name (or the GET IMAGE button) | start buttons | ■ | ⚙ | status."""
@@ -274,18 +322,26 @@ class MainWindow(QMainWindow):
                 long_label = len(button.label) > 6
                 if button.run_once:
                     widget: QWidget = QPushButton(button.label)
-                    widget.setMinimumWidth(170)
+                    widget.setMinimumWidth(_NAME_W)
+                    widget.setFixedHeight(_CONTROL_H)
                     widget.clicked.connect(lambda _c=False, k=button.key: self.press(k))
                     self.start_buttons[button.key] = widget          # type: ignore[assignment]
                     grid.addWidget(widget, line, 0)
                     continue
                 if index == 0 or long_label:
-                    name = QLabel(button.label if long_label else row.label)
-                    name.setStyleSheet(_NAME_STYLE)
-                    name.setMinimumWidth(170)
+                    name = _label(button.label if long_label else row.label, "name")
+                    name.setFixedHeight(_CONTROL_H)
                     grid.addWidget(name, line, 0)
+                text = "" if long_label or not button.label else button.label
                 tool = QToolButton()
-                tool.setText("▷" if long_label or not button.label else f"▷ {button.label}")
+                tool.setText(text or "▷")
+                tool.setIconSize(QSize(14, 14))
+                tool.setFixedHeight(_CONTROL_H)
+                if text:
+                    tool.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                else:
+                    tool.setFixedWidth(_CONTROL_H)
+                self._themed(tool, "play", "accent")
                 tool.setToolTip(button.log.replace(" clicked", "").replace("(", "").replace(")", "") or row.label)
                 tool.clicked.connect(lambda _c=False, k=button.key: self.press(k))
                 self.start_buttons[button.key] = tool
@@ -294,7 +350,8 @@ class MainWindow(QMainWindow):
                     holder = QWidget()
                     box = QHBoxLayout(holder)
                     box.setContentsMargins(0, 0, 0, 0)
-                    box.setSpacing(2)
+                    box.setSpacing(4)
+                    box.addStretch(1)
                     grid.addWidget(holder, line, 1)
                 else:
                     box = cell.widget().layout()                    # type: ignore[assignment]
@@ -304,7 +361,10 @@ class MainWindow(QMainWindow):
             span = line - first + 1
             stop = QToolButton()
             stop.setText("■")
-            stop.setStyleSheet(_STOP_STYLE)
+            stop.setProperty("kind", "stop")
+            stop.setFixedSize(_CONTROL_H, _CONTROL_H)
+            stop.setIconSize(QSize(16, 16))
+            self._themed(stop, "stop", "danger")
             stop.setToolTip(f"Stop {row.label}")
             stop.clicked.connect(lambda _c=False, k=row.key: self.stop_function(k))
             grid.addWidget(stop, first, 2, span, 1)
@@ -312,6 +372,9 @@ class MainWindow(QMainWindow):
             if row.options_key is not None:
                 gear = QToolButton()
                 gear.setText("⚙")
+                gear.setFixedSize(_CONTROL_H, _CONTROL_H)
+                gear.setIconSize(QSize(18, 18))
+                self._themed(gear, "gear", "muted")
                 gear.setToolTip(f"{row.panel} settings")
                 gear.clicked.connect(lambda _c=False, k=row.key: self.open_options(k))
                 grid.addWidget(gear, first, 3, span, 1)
@@ -324,73 +387,86 @@ class MainWindow(QMainWindow):
         return line
 
     def _section(self, grid: QGridLayout, line: int, title: str) -> int:
-        grid.addWidget(_header(title), line, 0, 1, 5)
+        if line > 0:
+            grid.setRowMinimumHeight(line, 30)
+            grid.addWidget(_section_label(title), line, 0, 1, 5, Qt.AlignmentFlag.AlignBottom)
+        else:
+            grid.addWidget(_section_label(title), line, 0, 1, 5)
         return line + 1
+
+    @staticmethod
+    def _rows_grid() -> QGridLayout:
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(5)
+        grid.setVerticalSpacing(4)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnMinimumWidth(0, _NAME_W)
+        return grid
 
     def _build_right(self) -> QWidget:
         right = QWidget()
         column = QVBoxLayout(right)
         column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(_GAP)
         top = QHBoxLayout()
+        top.setSpacing(_GAP)
         rows = {group: [r for r in self.controller.rows if r.group == group]
                 for group in (ACQUISITION, LOW_MAG, HIGH_MAG, BOWING_TILT, MESA)}
 
-        low = QGridLayout()
-        low.setHorizontalSpacing(4)
-        low.setVerticalSpacing(3)
+        low = self._rows_grid()
         line = 0
         for group in (ACQUISITION, LOW_MAG, HIGH_MAG):
             line = self._section(low, line, group)
             line = self._function_rows(low, line, rows[group])
         low.setRowStretch(line, 1)
-        top.addLayout(low)
+        top.addWidget(_card(low), 11)
 
-        high = QGridLayout()
-        high.setHorizontalSpacing(4)
-        high.setVerticalSpacing(3)
+        high = self._rows_grid()
         head = QHBoxLayout()
+        head.setSpacing(8)
         self.camera = QComboBox()
         self.camera.addItems(["High", "Low"])
         self.camera.setToolTip("Camera type (general.camera)")
+        self.camera.setMinimumWidth(84)
         self.camera.activated.connect(self.select_camera)
         head.addWidget(self.camera)
-        brand = QLabel("ALOX VISION CORE")
-        brand.setFont(QFont("DejaVu Sans", 15, QFont.Weight.Bold))
+        brand = _label("ALOX VISION CORE", "brand")
         brand.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         head.addWidget(brand, 1)
         high.addLayout(head, 0, 0, 1, 5)
         joy = QHBoxLayout()
+        joy.setSpacing(6)
         self.xy_joystick = QPushButton("XY JOYSTICK")
         self.z_joystick = QPushButton("Z JOYSTICK")
         for button, name in ((self.xy_joystick, "xy"), (self.z_joystick, "z")):
             button.setCheckable(True)
-            button.setStyleSheet("QPushButton:checked { background: #ffd24a; }")
             button.clicked.connect(lambda checked, n=name: self.set_joystick(n, checked))
             joy.addWidget(button)
         joy.addStretch(1)
-        joy.addWidget(QLabel("F (ms)"))
+        joy.addWidget(_label("F (ms)", "field"))
         self.f_ms = QLineEdit("0")
         self.f_ms.setReadOnly(True)
-        self.f_ms.setFixedWidth(60)
+        self.f_ms.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.f_ms.setFixedWidth(64)
+        self.f_ms.setAlignment(Qt.AlignmentFlag.AlignRight)
         joy.addWidget(self.f_ms)
         high.addLayout(joy, 1, 0, 1, 5)
-        high.addWidget(_header("VISION PROFILE"), 2, 0, 1, 5)
+        self._section(high, 2, "VISION PROFILE")
         profile = QHBoxLayout()
+        profile.setSpacing(4)
         self.profile = QComboBox()
-        self.profile.setMinimumWidth(200)
+        self.profile.setMinimumWidth(160)
         self.profile.activated.connect(lambda _i: self.load_profile(self.profile.currentText()))
         profile.addWidget(self.profile, 1)
-        sp = QStyle.StandardPixmap
         self.profile_refresh = QToolButton()
         self.profile_save = QToolButton()
         self.profile_edit = QToolButton()
-        for button, icon, tip, slot in ((self.profile_refresh, sp.SP_BrowserReload, "Refresh profiles",
-                                         self.refresh_profiles),
-                                        (self.profile_save, sp.SP_DialogSaveButton, "Save profile",
-                                         self.save_profile),
-                                        (self.profile_edit, sp.SP_FileDialogDetailedView, "Edit profiles",
-                                         self.edit_profiles)):
-            button.setIcon(self.style().standardIcon(icon))
+        for button, icon, tip, slot in ((self.profile_refresh, "refresh", "Refresh profiles", self.refresh_profiles),
+                                        (self.profile_save, "save", "Save profile", self.save_profile),
+                                        (self.profile_edit, "edit", "Edit profiles", self.edit_profiles)):
+            self._themed(button, icon)
+            button.setIconSize(QSize(18, 18))
+            button.setFixedSize(_CONTROL_H + 2, _CONTROL_H + 2)
             button.setToolTip(tip)
             button.clicked.connect(slot)
             profile.addWidget(button)
@@ -400,28 +476,31 @@ class MainWindow(QMainWindow):
             line = self._section(high, line, group)
             line = self._function_rows(high, line, rows[group])
         high.setRowStretch(line, 1)
-        top.addLayout(high)
+        top.addWidget(_card(high), 9)
         column.addLayout(top)
 
         self.tabs = QTabWidget()
         self.settings_host = QWidget()
         self.settings_layout = QVBoxLayout(self.settings_host)
-        self.settings_layout.setContentsMargins(0, 0, 0, 0)
+        self.settings_layout.setContentsMargins(6, 6, 6, 6)
         self.settings_page = QLabel()
         self.settings_page.setWordWrap(True)
         self.settings_page.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.settings_page.setContentsMargins(8, 6, 8, 6)
         self.settings_layout.addWidget(self.settings_page)
         self._settings_placeholder(None)
         self.low_page = QListWidget()
+        self.low_page.setProperty("flat", True)
         self.high_page = QWidget()
         high_layout = QVBoxLayout(self.high_page)
+        high_layout.setContentsMargins(14, 12, 14, 12)
+        high_layout.setSpacing(6)
         self.measure_labels: dict[Measure, QLabel] = {}
         for measure in (Measure.MESA, Measure.TILT, Measure.BOWING):
             label = QLabel()
             high_layout.addWidget(label)
             self.measure_labels[measure] = label
-        note = QLabel("Results panels: next step (" + NEXT_STEPS[3].split(" (")[0] + ").")
-        note.setStyleSheet("color: #666;")
+        note = _label("Results panels: next step (" + NEXT_STEPS[3].split(" (")[0] + ").", "muted")
         high_layout.addWidget(note)
         high_layout.addStretch(1)
         self.tabs.addTab(self.settings_host, Tab.SETTINGS.label)
@@ -432,12 +511,33 @@ class MainWindow(QMainWindow):
 
     def _build_statusbar(self) -> None:
         bar = self.statusBar()
+        bar.setSizeGripEnabled(False)
         self.user_label = QLabel()
         self.core_label = QLabel()
         self.wl_label = QLabel()
         for widget in (self.wl_label, self.core_label, self.user_label):
             widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             bar.addPermanentWidget(widget)
+
+    # ============================================================================================== theme
+    def set_theme(self, name: str | theme.Theme) -> theme.Theme:
+        """Switch the application to the theme ``name`` (``light`` / ``dark``) and remember it for the user."""
+        chosen = theme.resolve(name)
+        if chosen is not theme.current() or not theme.applied():
+            theme.apply(None, chosen)
+            theme.save(chosen)
+        self.apply_theme()
+        return chosen
+
+    def apply_theme(self) -> None:
+        """Re-make what the style sheet does not draw (icons, image background) in the current theme."""
+        current = theme.current()
+        for target, name, colour in self._themed_icons:
+            target.setIcon(icons.icon(name, getattr(current, colour)))
+        self.view.set_colours(current)
+        self.theme_action.blockSignals(True)
+        self.theme_action.setChecked(current is theme.DARK)
+        self.theme_action.blockSignals(False)
 
     def _settings_placeholder(self, panel: str | None) -> None:
         self._drop_panel()

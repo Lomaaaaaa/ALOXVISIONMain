@@ -14,7 +14,6 @@ from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -35,11 +34,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from alox.ui import theme
 from alox.ui.settings_panels import ApplyResult, Field, Group, Kind, SettingsModel
 
 __all__ = ["SettingsPanel"]
 
-_TITLE_FONT = QFont("DejaVu Sans", 12, QFont.Weight.Bold)
 _COLUMNS = 2                       # label/input pairs per row of a group
 _INT_LIMIT = 2_147_483_647
 
@@ -52,6 +51,7 @@ class _PathEdit(QWidget):
         self.field = f
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         self.line = QLineEdit()
         self.line.editingFinished.connect(lambda: on_change(self.line.text()))
         self.browse = QToolButton()
@@ -99,15 +99,20 @@ class SettingsPanel(QFrame):
         self.labels: dict[str, QLabel] = {}
         self.buttons: dict[str, QPushButton] = {}
         self.selector: QComboBox | None = None
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(8)
         title = QLabel(self.spec.title)
-        title.setFont(_TITLE_FONT)
+        title.setProperty("role", "title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         if self.spec.selector is not None:
             row = QHBoxLayout()
-            row.addWidget(QLabel(self.spec.selector.label))
+            row.setSpacing(8)
+            caption = QLabel(self.spec.selector.label)
+            caption.setProperty("role", "field")
+            row.addWidget(caption)
             self.selector = QComboBox()
             for value, text in self.spec.selector.items:
                 self.selector.addItem(text, value)
@@ -126,6 +131,7 @@ class SettingsPanel(QFrame):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         buttons = QHBoxLayout()
+        buttons.setSpacing(8)
         buttons.addStretch(1)
         for name, slot, tip in (("APPLY", self.apply, "Write the changes into the active profile (next run)"),
                                 ("SAVE", self.save, "Apply, then save the recipe"),
@@ -133,6 +139,9 @@ class SettingsPanel(QFrame):
                                 ("CLOSE", self.close_panel, "Close the panel")):
             button = QPushButton(name)
             button.setToolTip(tip)
+            button.setMinimumWidth(88)
+            if name == "APPLY":
+                button.setProperty("kind", "primary")
             button.clicked.connect(lambda _c=False, s=slot: s())
             buttons.addWidget(button)
             self.buttons[name] = button
@@ -143,6 +152,8 @@ class SettingsPanel(QFrame):
     def _page(self, groups: tuple[Group, ...]) -> QWidget:
         inner = QWidget()
         column = QVBoxLayout(inner)
+        column.setContentsMargins(8, 4, 8, 8)
+        column.setSpacing(4)
         for group in groups:
             column.addWidget(self._group(group))
         column.addStretch(1)
@@ -155,9 +166,13 @@ class SettingsPanel(QFrame):
     def _group(self, group: Group) -> QGroupBox:
         box = QGroupBox(group.title)
         grid = QGridLayout(box)
+        grid.setContentsMargins(2, 0, 2, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
         for index, f in enumerate(group.fields):
             line, pair = divmod(index, _COLUMNS)
             label = QLabel(f.caption)
+            label.setProperty("role", "field")
             widget = self._input(f)
             grid.addWidget(label, line, 2 * pair)
             grid.addWidget(widget, line, 2 * pair + 1)
@@ -165,6 +180,8 @@ class SettingsPanel(QFrame):
             self.inputs[f.key] = widget
         for pair in range(_COLUMNS):
             grid.setColumnStretch(2 * pair + 1, 1)
+            if pair:
+                grid.setColumnMinimumWidth(2 * pair, 120)
         return box
 
     def _input(self, f: Field) -> QWidget:
@@ -192,6 +209,7 @@ class SettingsPanel(QFrame):
             spin.setRange(float(f.minimum or 0.0), float(f.maximum or 0.0))
             spin.setSingleStep(f.step)
         spin.setKeyboardTracking(False)
+        spin.setAlignment(Qt.AlignmentFlag.AlignRight)
         if f.unit:
             spin.setToolTip(f"{f.caption}: {f.minimum:g} … {f.maximum:g}")
         spin.valueChanged.connect(lambda value, k=key: self._edit(k, value))
@@ -276,7 +294,8 @@ class SettingsPanel(QFrame):
 
     def _message(self, text: str, *, error: bool = False) -> None:
         self.status.setText(text)
-        self.status.setStyleSheet("color: #c00000;" if error else "")
+        self.status.setVisible(bool(text))
+        theme.repolish(self.status, tone="error" if error else "")
 
     # ============================================================================================== buttons
     def _done(self, result: ApplyResult, verb: str) -> None:

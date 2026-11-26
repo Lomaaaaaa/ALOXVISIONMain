@@ -44,18 +44,20 @@ from PySide6.QtWidgets import (
 )
 
 from alox.core.users import UserType
+from alox.ui import theme
 from alox.ui.controller import StatusLook
 
 __all__ = ["ImageView", "LogWindow", "LoginDialog", "StatusIndicator", "Tool"]
 
 
 class StatusIndicator(QLabel):
-    """A function status: black text on the status colour (transparent for "OFF OK")."""
+    """A function status: a flat badge with the status text (LabVIEW's texts and meanings; the colours are the
+    theme's, :class:`alox.ui.theme.Badge`, through the ``status`` style property)."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(104, 22)
-        self.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self.setFixedSize(86, 22)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.look: StatusLook | None = None
 
     def set_look(self, look: StatusLook) -> None:
@@ -63,9 +65,12 @@ class StatusIndicator(QLabel):
             return
         self.look = look
         self.setText(look.text)
-        background = look.background or "transparent"
-        self.setStyleSheet(f"QLabel {{ background-color: {background}; color: {look.foreground}; "
-                           f"border: 1px solid #8c8c8c; padding-left: 4px; }}")
+        theme.repolish(self, status=theme.STATUS_KEYS[look.status])
+
+    @property
+    def badge(self) -> theme.Badge | None:
+        """The colours shown (current theme)."""
+        return None if self.look is None else theme.current().badge(self.look.status)
 
 
 class Tool(IntEnum):
@@ -91,16 +96,18 @@ class ImageView(QGraphicsView):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
-        self.setBackgroundBrush(QBrush(QColor("#d6d6d6")))
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setFrameShape(QFrame.Shape.Panel)
-        self.setFrameShadow(QFrame.Shadow.Sunken)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self._pixmap = self.scene().addPixmap(QPixmap())
         self._placeholder = QGraphicsSimpleTextItem("NO IMAGE")
-        self._placeholder.setBrush(QBrush(QColor("#7a7a7a")))
-        self._placeholder.setFont(QFont("DejaVu Sans", 28))
+        font = QFont()
+        font.setFamilies(list(theme.FONT_FAMILIES))
+        font.setPixelSize(30)
+        font.setWeight(QFont.Weight.DemiBold)
+        self._placeholder.setFont(font)
         self.scene().addItem(self._placeholder)
+        self.set_colours(theme.current())
         pen = QPen(QColor("#ff2020"))
         pen.setCosmetic(True)
         pen.setWidth(2)
@@ -117,6 +124,11 @@ class ImageView(QGraphicsView):
         self._tool = Tool.RECT
         self._anchor: QPointF | None = None
         self.set_tool(Tool.RECT)
+
+    def set_colours(self, colours: theme.Theme) -> None:
+        """The neutral dark background around the image and the placeholder text of ``colours``."""
+        self.setBackgroundBrush(QBrush(QColor(colours.image)))
+        self._placeholder.setBrush(QBrush(QColor(colours.image_text)))
 
     # ------------------------------------------------------------------------------------------ image
     @property
