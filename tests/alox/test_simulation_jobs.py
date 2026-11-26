@@ -12,7 +12,6 @@ the websocket server sends).
 from __future__ import annotations
 
 import math
-import queue
 import time
 from collections.abc import Iterator
 from dataclasses import replace
@@ -44,19 +43,12 @@ class Jobs:
         """Post the job, return its websocket events by name once ``finished`` (or ``failed``) arrived."""
         core = self.app.core
         assert core is not None
-        while True:                                                   # drop what earlier jobs left
-            try:
-                self.events.get(timeout=0)
-            except queue.Empty:
-                break
+        self.events.drain()                                           # drop what earlier jobs left
         core.post(method, core.measure_request(measure, JobInfo(wafer_id="SIM-1"), overrides))
         seen: dict[str, list[dict[str, Any]]] = {}
         end = time.monotonic() + timeout
         while time.monotonic() < end:
-            try:
-                event = self.events.get(timeout=0.5)
-            except queue.Empty:
-                continue
+            event = self.events.get(timeout=0.5)
             if event is None:
                 continue
             name = event.topic.removeprefix("ws.")
@@ -89,7 +81,7 @@ def test_tilt_job_measures_the_wafer_rotation_on_the_flat(jobs: Jobs):
     assert "failed" not in seen and "error" not in seen, seen.get("error")
     angle = _f(seen["measure_tilt"][-1]["Tilt"]["Angle"])
     assert angle == pytest.approx(jobs.scene.params.tilt_deg, abs=0.03)
-    assert jobs.app.core.tilt() == pytest.approx(angle)
+    assert jobs.app.core.tilt() == pytest.approx(angle, abs=1e-6)                 # used by the mesa job
 
 
 def test_singleshot_mesa_job_measures_the_mesa_and_its_aperture(jobs: Jobs):
@@ -122,8 +114,8 @@ def test_bowing_job_finds_the_scene_bowing_and_parallelism(jobs: Jobs):
               "zwafer1": (-distance * c, -distance * s), "zchuck1": (-radius * c, -radius * s),
               "zwafer4": (distance * c, -distance * s), "zchuck4": (radius * c, -radius * s),
               "zwafer5": (-distance * c, distance * s), "zchuck5": (-radius * c, radius * s)}
-    measured = {**{k.lower(): _f(v) for k, v in event["Bowing"].items() if k.lower().startswith("zwafer")},
-                **{k.lower(): _f(v) for k, v in event["Parallelism"].items() if k.lower().startswith("zchuck")}}
+    measured = {k.lower(): _f(v) for k, v in {**event["Bowing"], **event["Parallelism"]}.items()
+                if k.lower() in points}
     truth = {name: scene.focus_z(*xy) for name, xy in points.items()}
     for name, z in truth.items():
         assert measured[name] == pytest.approx(z, abs=0.0025), name              # µm-level autofocus + refocus
@@ -137,4 +129,4 @@ def test_bowing_job_finds_the_scene_bowing_and_parallelism(jobs: Jobs):
     assert _f(event["Bowing"]["bowingb"]) == pytest.approx(expected.bow_b_um, abs=2.5)
     assert _f(event["Parallelism"]["parallelisma"]) == pytest.approx(expected.para_a_um, abs=3.0)
     assert _f(event["Parallelism"]["parallelismb"]) == pytest.approx(expected.para_b_um, abs=3.0)
-    assert any(core.folders.jobhistory.rglob("*.bow"))                          # the data file of the job
+    assert any(core.folders.data.rglob("*.bow"))                                # the data file of the job

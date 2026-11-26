@@ -151,16 +151,18 @@ class SceneParams:
     lowmag_focus_offset_mm: float = 0.0
     # optics: blur sigma (µm) = hypot(psf, blur_per_um·|ΔZ µm|, pixel/2)
     highmag_blur_per_um: float = 0.5
-    lowmag_blur_per_um: float = 0.12
+    lowmag_blur_per_um: float = 0.2
     highmag_psf_um: float = 0.4
-    lowmag_psf_um: float = 1.5
+    lowmag_psf_um: float = 2.0
     # reflectances (0…1) and textures
     reflectance_field: float = 0.15
     reflectance_aperture: float = 0.80
     reflectance_mark: float = 0.95
     reflectance_chuck: float = 0.45                # polished chuck, brighter than the etched field
-    texture_wafer: float = 0.03              # amplitude (std, reflectance) and grain (µm)
+    texture_wafer: float = 0.03              # amplitude (std, reflectance) and grain (µm): fine, seen in High Mag
     texture_wafer_um: float = 1.5
+    texture_wafer_coarse: float = 0.03       # and coarse, seen in Low Mag
+    texture_wafer_coarse_um: float = 8.0
     texture_chuck: float = 0.1
     texture_chuck_um: float = 2.0
     # oxide contrast: R_oxide = R_aperture · (1 − c(λ)), c = min + (max − min)·exp(−((λ − peak)/width)²)
@@ -496,9 +498,14 @@ class Scene:
         flip = (n // _NOISE_FRAMES) % 4                                    # 4 × more patterns, as free views
         return frame[::-1 if flip & 1 else 1, ::-1 if flip & 2 else 1]
 
-    def _texture(self, x_um: float, y_um: float, du: np.ndarray, dv: np.ndarray, cell_um: float,
+    def _texture(self, x_um: float, y_um: float, du: np.ndarray, dv: np.ndarray, cell_um: float, sigma: float,
                  offset: int) -> np.ndarray:
-        """The texture tile at design ``(x_um + du, y_um + dv)`` (grain ``cell_um``)."""
+        """A random texture of grain ``cell_um`` fixed on the wafer, at design ``(x_um + du, y_um + dv)``, blurred by
+        ``sigma`` µm: a Gaussian-correlated texture keeps its statistics with the grain ``√(c² + 2σ²)`` and the
+        amplitude ``c² / (c² + 2σ²)`` (so it is never sampled finer than the blur: no aliasing)."""
+        blurred = cell_um * cell_um + 2.0 * sigma * sigma
+        cell_um = math.sqrt(blurred)
+        gain = np.float32((cell_um * cell_um - 2.0 * sigma * sigma) / blurred)
         step = cell_um / _TILE_SAMPLES_PER_CELL
         fx, fy = x_um / step, y_um / step
         mask = _TILE - 1
@@ -506,7 +513,7 @@ class Scene:
               + ((math.floor(fx) + offset) & mask)) & mask
         iy = (np.floor(np.float32(fy - math.floor(fy)) + dv * np.float32(1.0 / step)).astype(np.int32)
               + ((math.floor(fy) + 3 * offset) & mask)) & mask
-        return np.take(self._tile, (iy << 10) | ix)
+        return np.take(self._tile, (iy << 10) | ix) * gain
 
     def _clean(self, camera: str, w: int, h: int, px: float, centre: tuple[float, float], z: float, wl: float,
                led: bool, aperture_um: float, exposure_us: float, gain_db: float) -> np.ndarray:
@@ -554,9 +561,8 @@ class Scene:
             wafer = self._wafer(x0, y0, du, dv, sw, px, reach, aperture_um, contrast)
             refl = wafer * cover
         if not (np.isscalar(cover) and cover == 1.0):
-            g = math.exp(-0.5 * (sc / p.texture_chuck_um) ** 2)
             chuck = np.float32(p.reflectance_chuck) * (
-                1.0 + np.float32(p.texture_chuck * g) * self._texture(x0, y0, du, dv, p.texture_chuck_um, 101))
+                1.0 + np.float32(p.texture_chuck) * self._texture(x0, y0, du, dv, p.texture_chuck_um, sc, 101))
             refl = refl + chuck * (1.0 - cover)
         return out + np.asarray(refl, dtype=np.float32) * scale
 
@@ -564,8 +570,9 @@ class Scene:
                aperture_um: float, contrast: float) -> np.ndarray:
         """Reflectance of the wafer surface (field, mesas, marks, texture) blurred by ``sigma`` µm."""
         p = self.params
-        g = math.exp(-0.5 * (sigma / p.texture_wafer_um) ** 2)            # the etched field is rough, mesa tops
-        texture = np.float32(p.texture_wafer * g) * self._texture(x0, y0, du, dv, p.texture_wafer_um, 0)  # smooth
+        texture = (np.float32(p.texture_wafer) * self._texture(x0, y0, du, dv, p.texture_wafer_um, sigma, 0)
+                   + np.float32(p.texture_wafer_coarse) * self._texture(x0, y0, du, dv, p.texture_wafer_coarse_um,
+                                                                         sigma, 37))
         refl = np.float32(p.reflectance_field) + texture
         # mesas: nearest grid node of each pixel
         pitch = p.mesa_pitch_um
