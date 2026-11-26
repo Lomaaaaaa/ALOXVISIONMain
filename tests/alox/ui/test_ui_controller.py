@@ -196,7 +196,7 @@ def test_options_settings_profiles_and_exit(core: Core, wait_until: Callable[...
 
 # ============================================================================================== devices
 def test_moves_wavelength_joysticks_and_refresh(core: Core, devices: dict[str, Any]):
-    ticks = iter([10.0, 10.25])
+    ticks = iter([10.0, 10.25, 11.0])
     c = Controller(core, clock=lambda: next(ticks))
     assert c.wafer_position() == (1.0, 2.0)
     assert c.move("x", 3.0, 4.0).ok and c.move("y", 3.0, 4.0).ok
