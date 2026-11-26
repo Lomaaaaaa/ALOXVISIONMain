@@ -103,6 +103,7 @@ class Camera(Device):
         self._dark: np.ndarray | None = None
         self.bus_type = ""
         self.serial_number = ""
+        self.frame_rate: float | None = None          # the last frame rate written by set_exposure (Hz)
         device_options.setdefault("default_timeout_s", grab_timeout_ms / 1000.0 + 10.0)
         super().__init__(name, publish=publish, sleep=sleep, **device_options)
 
@@ -225,11 +226,18 @@ class Camera(Device):
             rate = in_range_and_coerce(0.95 / (exposure / 1_000_000.0), FRAMERATE_LOWER_LIMIT, upper)
             try:
                 write_typed(device, s.framerate_attribute, s.framerate_type, rate)
+                self.frame_rate = rate
             except CameraError as exc:
                 log.warning("%s: frame rate %g not written: %s", self.name, rate, exc)
             self.emit("exposure", exposure_us=exposure, framerate=rate)
             return exposure
         return self.call("set exposure", run)
+
+    @property
+    def frame_period_s(self) -> float:
+        """1 / the frame rate written by :meth:`set_exposure` (0 before): longer than the exposure when the frame rate
+        is capped by the camera's maximum."""
+        return 1.0 / self.frame_rate if self.frame_rate else 0.0
 
     def gain(self) -> float:
         return self.call("gain", self._read_gain)

@@ -789,7 +789,8 @@ class _MesaJob:
         wl.goto(target, wait=True)
         if self.o.fresh_frame_after_wl and old != target:
             exposure = self.exposure_us()
-            self.pause(fresh_frame_wait_s(exposure, exposure))
+            period = getattr(self.s.devices.get(self.o.camera), "frame_period_s", 0.0)
+            self.pause(fresh_frame_wait_s(exposure, exposure, float(period or 0.0)))
 
     def manual_wavelength(self) -> float:
         return float(self.s.profile.get("wavelength.wlmanual", 0.0))

@@ -185,6 +185,8 @@ def test_wait_rules_and_line() -> None:
     assert settle_s(WaitRule.CHANGELOG, 10000, 40000) == pytest.approx(0.080)
     assert settle_s(WaitRule.FRESH_FRAME, 10000, 40000) == fresh_frame_wait_s(10000, 40000) == pytest.approx(0.050)
     assert fresh_frame_wait_s(NAN, 40000) == pytest.approx(0.080)               # unknown old exposure: the new one
+    assert fresh_frame_wait_s(10000, 10000, 0.040) == pytest.approx(0.050)     # capped frame rate: a period
+    assert settle_s(WaitRule.FRESH_FRAME, 10000, 40000, 0.005) == pytest.approx(0.050)
     assert settle_s(WaitRule.GET_IMAGE, 10000, 40000) == pytest.approx(0.100 + 0.11 * 0.040)
     assert simple_line_from_two_points((0, 0), (1000, 50)) == (0.05, 0.0)
     assert simple_line_from_two_points((0, 0), (1000, -50))[0] == 0.05     # abs(): slope always ≥ 0

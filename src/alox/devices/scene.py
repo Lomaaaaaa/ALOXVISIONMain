@@ -16,8 +16,9 @@ render a physically plausible scene from the current state of the other simulate
   up whatever the stage coordinate system (the convention of :func:`alox.vision.wafer.tracking_move`; the camera
   device applies its flips afterwards). Both cameras look at the same point (coaxial, parfocal unless
   ``*_focus_offset_mm``).
-- **Focus**: the blur (a Gaussian PSF, rendered analytically: the edges are error-function steps, the textures are
-  attenuated) grows with ``|Z − Z_focus|`` (``*_blur_per_um`` µm of blur radius per µm of defocus, plus the optical
+- **Focus**: the blur (a Gaussian PSF, rendered analytically: the edges are error-function steps, the random surface
+  textures (a fine and a coarse grain on the etched field, a fine grain on the chuck; the mesa tops are smooth) are
+  coarsened and attenuated as blurred Gaussian-correlated noise, never sampled finer than the blur) grows with ``|Z − Z_focus|`` (``*_blur_per_um`` µm of blur radius per µm of defocus, plus the optical
   PSF and the pixel). ``Z_focus`` of the wafer surface is :attr:`~SceneParams.z_focus_mm` at the centre plus a
   paraboloid bowing of :attr:`~SceneParams.bowing_um` at the wafer edge and a wedge (µm per mm); the chuck is flat at
   :attr:`~SceneParams.chuck_dz_mm` from the wafer centre (parallelism). :meth:`Scene.focus_z` is the reference the
@@ -25,11 +26,14 @@ render a physically plausible scene from the current state of the other simulate
 - **Light**: the monochromator wavelength (emulator position; 0 nm = zero order, white) lights the High Mag view; the
   Low Mag view is lit by the LED (``device.<camera>.led`` events) and a fraction of the monochromator light. The
   oxide/aperture contrast peaks at :attr:`~SceneParams.contrast_peak_nm` (Search Wavelength finds it). Grey levels are
-  proportional to the exposure and the gain (dB), with a dark level, read and shot noise, saturating at 255 (Mono8).
+  proportional to the exposure and the camera's linear gain (below 1 read as 1), with a dark level, read and shot
+  noise, saturating at 255 (Mono8). A frame shows the devices' state when the camera produces it (at most the frame
+  rate, :attr:`~SceneParams.frame_rate_max`): a frame grabbed just after a move can show the state before it, as on the
+  machine (hence ``refocus.waitms`` and ``hardware.z.fastaflatency`` in the demo).
 
-Rendering is vectorised NumPy over the field of view only (a few ms for the default 612 × 512 frame, tens of ms at the
-real 2448 × 2048); a frame is re-rendered only when an input changed (positions, wavelength, LED, exposure, aperture
-to 1 nm), otherwise only the noise is new. Deterministic for a given seed and frame number.
+Rendering is vectorised NumPy over the field of view only (about 8 ms for the default 612 × 512 frame, about 0.6 s
+at the real 2448 × 2048); a frame is re-rendered only when an input changed (positions, wavelength, LED, exposure,
+gain, aperture to 10 nm), otherwise only the noise is new. Deterministic for a given seed and frame number.
 
 **Demo** (synthetic values; ``src/alox/devices/scene_demo``: ``alox_default.ini`` with the simulated hardware and
 ``[simulation.scene]``, ``demo.ini`` the recipe)::
@@ -37,9 +41,20 @@ to 1 nm), otherwise only the noise is new. Deterministic for a given seed and fr
     python -m alox.devices.scene --make-demo /tmp/alox-demo       # folders, settings, the DEMO profile, the models
     alox --simulate --setup-ini /tmp/alox-demo/alox_setup.ini     # REST 8002, websocket 6123 (add --ui for the window)
 
-then post the supervisor jobs, e.g. ``PUT /alox/v1/functions/measure_mesa`` (Singleshot or continuous: the aperture
-shrinks at 0.5 µm/min, so the rate and the remaining time to the 10 µm target are meaningful), ``measure_bowing``
-(20 µm at the wafer edge), ``measure_tilt``. ``python -m alox.devices.scene --render highmag out.png`` writes one frame.
+then post the supervisor jobs (``PUT /alox/v1/functions/measuretilt``, ``measuremesa?singleshot=true``,
+``measurebowing``; the XY stage starts on the chuck at (0, 0), the jobs move it). What a run gives (``tests/alox/
+test_simulation_jobs.py`` checks it):
+
+- tilt (straight edge on the flat, Low Mag autofocus): ≈ 0.30° (the scene's ``tilt_deg``), 6 s;
+- mesa, Singleshot with the tilt correction (Move Start to the cross at (−0.5, 0) mm, Search Object with the Low Mag
+  autofocus, the 0.5 mm offset to the mesa, High Mag refocus, Detect Circle, tracking, Search Wavelength 800…900 nm →
+  850 nm, three Measure Oxyd): External ≈ 30.0 µm, oxide aperture ≈ 24 µm − 0.5 µm/min since the start, 10 s; in
+  continuous mode the rate (≈ 0.5 µm/min) and the remaining time to the 10 µm target appear once the regression
+  window (120 s) holds 10 points;
+- bowing (nine points, autofocus + refocus each): Z within 1 µm of :meth:`Scene.focus_z`, Bowing A/B ≈ 15.7 µm (the
+  20 µm paraboloid read at 30 mm, linearised by the formula), parallelism ≈ 4 / −13 µm (the wedge), 35 s.
+
+``python -m alox.devices.scene --render highmag out.png`` writes one frame of the demo scene.
 """
 
 from __future__ import annotations
@@ -167,7 +182,7 @@ class SceneParams:
     texture_chuck_um: float = 2.0
     # oxide contrast: R_oxide = R_aperture · (1 − c(λ)), c = min + (max − min)·exp(−((λ − peak)/width)²)
     contrast_peak_nm: float = 850.0
-    contrast_width_nm: float = 60.0
+    contrast_width_nm: float = 30.0
     contrast_max: float = 0.55
     contrast_min: float = 0.08
     contrast_white: float = 0.25             # zero order (0 nm) and LED
@@ -469,7 +484,7 @@ class Scene:
         wl = wavelength_nm if wavelength_nm is not None else wl
         on = self.led if led is None else bool(led)
         centre = self.stage_to_wafer(float(xy[0]), float(xy[1]))
-        aperture = round(self.aperture_um(t), 3)
+        aperture = round(self.aperture_um(t), 2)                                # re-rendered every 10 nm
         px = self.pixel_size_um(camera)
         key = (w, h, px, centre, round(z, 6), round(wl, 3), on, aperture, float(exposure_us), max(1.0, float(gain)),
                self.wafer_radius_mm())

@@ -7,6 +7,10 @@ tilt correction (Move Start, Search Object on the cross, offset to the mesa, aut
 tracking, Search Wavelength, Measure Oxyd), then the bowing (nine points, autofocus + refocus each). The recipe is
 the demo's (``src/alox/devices/scene_demo``). The websocket events are read on the event bus (``ws.<event>``: what
 the websocket server sends).
+
+About 55 s (tilt 6 s, mesa 10 s, bowing 35 s: nine 2 s autofocus scans and refocuses); marked ``slow``. The scene
+renders frames in real time, so as on the machine the results depend on the frames being fresh: a heavily loaded
+computer can make them less accurate.
 """
 
 from __future__ import annotations
@@ -25,6 +29,8 @@ from alox.core.commands import Method
 from alox.core.functions import FunctionName, JobInfo
 from alox.devices.scene import Scene, make_demo
 from alox.vision.wafer import ChuckProperties, compute_bowing
+
+pytestmark = pytest.mark.slow
 
 
 class Jobs:

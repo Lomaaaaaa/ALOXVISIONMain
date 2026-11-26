@@ -590,7 +590,7 @@ class _SWJob:
             if changed:
                 self.pause(settle_s(WaitRule.GET_IMAGE, old, new))
         elif changed or wl != self.ss.last_grab_wl:                   # B3 / changelog: also after a WL change
-            self.pause(settle_s(rule, old, new))
+            self.pause(settle_s(rule, old, new, float(getattr(camera, "frame_period_s", 0.0) or 0.0)))
         self.ss.last_grab_wl = wl
         return grab_image(self.s, self.ctx, self.o.camera, "Current", newest=self.o.newest_frame)
 

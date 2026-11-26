@@ -178,22 +178,28 @@ class WaitRule(StrEnum):
     GET_IMAGE = "get_image"      # 100 ms + 0.11 × max(old, new exposure) (monochromator.md §6.3, Get Image)
 
 
-def fresh_frame_wait_s(old_us: float, new_us: float) -> float:
+def fresh_frame_wait_s(old_us: float, new_us: float, period_s: float = 0.0) -> float:
     """Owner decision B3 ("wait to get a new image according to the exposure"): after a wavelength or exposure change
     the image used must be exposed entirely after the change. The frame being exposed at the change ends at most
     ``old`` µs later and the next one takes ``new`` µs, so after ``old + new`` the newest frame
     (``Camera.grab(newest=True)``) started after the change. An unknown old exposure counts as the new one. Seconds.
-    Shared helper (the HL mesa function can reuse it)."""
+    Shared helper (the HL mesa function can reuse it).
+
+    ``period_s``: the camera's frame period. When the frame rate is capped by the camera maximum the period is longer
+    than the exposure and the frame in progress ends up to one period after the change: the wait is then
+    ``max(old, period) + new`` (``old + new`` assumed back-to-back exposures; found with the simulated scene, where
+    a Search Wavelength step could measure the previous wavelength's frame)."""
     new = _finite(new_us)
     old = float(old_us) if math.isfinite(old_us) else new
-    return (max(old, 0.0) + max(new, 0.0)) / 1e6
+    period = float(period_s) * 1e6 if math.isfinite(period_s) else 0.0
+    return (max(old, period, 0.0) + max(new, 0.0)) / 1e6
 
 
-def settle_s(rule: WaitRule, old_us: float, new_us: float) -> float:
+def settle_s(rule: WaitRule, old_us: float, new_us: float, period_s: float = 0.0) -> float:
     """The wait of ``rule`` in seconds for exposures in µs (``AS_DRAWN`` is resolved by the caller; here it gives the
-    Get Image formula of monochromator.md §6.3)."""
+    Get Image formula of monochromator.md §6.3); ``period_s`` the frame period (:func:`fresh_frame_wait_s`)."""
     if rule is WaitRule.FRESH_FRAME:
-        return fresh_frame_wait_s(old_us, new_us)
+        return fresh_frame_wait_s(old_us, new_us, period_s)
     worst = max(_finite(old_us), _finite(new_us))
     if rule is WaitRule.CHANGELOG:
         return 2.0 * worst / 1e6
