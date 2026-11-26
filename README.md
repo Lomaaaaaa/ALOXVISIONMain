@@ -44,6 +44,13 @@ alox --simulate --setup-ini D:\alox\alox_setup.ini
   supervisor's `PUT /alox/v1/system/shutdown`.
 - `alox --simulate --check` only opens the devices, prints their status as JSON and exits (0 when all are ready).
 
+### Licence
+
+There is no licence check by default (owner's decision L1). When one is wanted, `tools/licence_generator.py` issues a
+licence file bound to one PC and signed with Aloxtec's private key (`keygen` once, `machine-id` on the customer PC,
+`issue`, `verify`; see its help); the file goes next to the executable as `licence.alox`, and
+`alox.ini [general] licence_BOOL = TRUE` turns the boot check on (`pip install -e ".[licence]"`).
+
 ## Documentation
 
 The LabVIEW code has been analysed into a specification for the re-implementation. It is in [`docs/`](docs/README.md).

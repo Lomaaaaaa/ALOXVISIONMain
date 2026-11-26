@@ -399,7 +399,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.no_reference:
         config = replace(config, always_reference=False)
     log.info("alox %s starting (%s)", __version__, "simulation" if config.simulate else "hardware")
-    with Application(config) as app:
+    from alox.licence import LicenceError
+
+    try:
+        application = Application(config)
+    except LicenceError as exc:
+        log.critical("ALOX Vision cannot boot: %s (status %d)", exc, exc.code)
+        return 2
+    with application as app:
         app.events.on(("device",), _log_event)
         states = app.start()
         if args.check:

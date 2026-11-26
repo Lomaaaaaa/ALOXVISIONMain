@@ -6,7 +6,8 @@ background services (``docs/vision-core/map.md`` Part 1 §2.3–§2.6, Part 2 §
 
 - :meth:`Core.boot` is the boot cycle without the hardware: system status 10, the folders (frame 14), ``alox.ini``
   copied from ``alox_default.ini`` when missing and completed with its missing keys ("Load" + "Check", frame 2), the
-  language (frames 4, 5), the log (frame 9), the users. The dongle check (frames 6, 7) is not ported (licence, phase 12).
+  language (frames 4, 5), the log (frame 9), the users. The dongle check (frames 6, 7) becomes the signed licence
+  file of :mod:`alox.licence`, checked only when ``[general] licence_BOOL`` is TRUE (owner L1: off by default).
 - :meth:`Core.start` is the init cycle: statuses 50..57 while the devices open (cameras/Z, XY, monochromator), 58 and
   the active profile ("Init Profile", ``general.profile``), the default exposure table when the profile has none (frame
   26), then 100 "System Initialized" (frame 34). A device that did not open sets its hardware bits right after. Then
@@ -193,10 +194,27 @@ class Core:
         self.properties = self._load_properties()
         self.users = Users(self.properties)
         self._set_language(self.properties.get("general.language", DEFAULT_LANGUAGE))
+        self._check_licence()
         self.log = AppLog(int(self.properties.get("log.maxlines", 1000) or 1000), translations=self.translations,
                           daily_dir=self.folders.logs)
         self.system.set(SystemCode.INIT_HEARTBEAT)
         self.log.info(f"alox {__version__} booting")
+
+    def _check_licence(self) -> None:
+        """Boot frames 6, 7 with the new licence (owner L1): status 11, then 1513/1514/1515 and
+        :class:`alox.licence.LicenceError` when the check is enabled and fails."""
+        if not self.properties.get("general.licence", False):
+            return
+        from alox.licence import LicenceError, check_licence
+
+        self.system.set(SystemCode.CHECKING_DONGLE)
+        status = check_licence(self.folders.exe)
+        if not status.valid:
+            self.system.set(status.code)
+            log.error("licence: %s", status.reason)
+            raise LicenceError(status.code, status.reason)
+        days = f", {status.remaining_days} day(s) left" if status.remaining_days is not None else ""
+        log.info("licence valid (%s%s)", status.customer or "no customer name", days)
 
     def _load_properties(self) -> Properties:
         defaults = self.folders.defaults_ini
