@@ -92,7 +92,7 @@ def params_class(function: Any) -> type | None:
 
 
 def build_params(function: Any, profile: Any, overrides: Mapping[str, Any] | None = None, *,
-                 warn: Callable[[str], None] = log.warning) -> Any:
+                 warn: Callable[[str], None] = log.warning, settings: Any = None) -> Any:
     """The parameters of a local start (module docstring). Overrides naming a field the class does not have are
     ignored (with a warning). Returns None when the function has no parameters class (it then reads its profile
     itself). Errors of the params class (invalid profile values) propagate: the start is refused with them."""
@@ -102,7 +102,12 @@ def build_params(function: Any, profile: Any, overrides: Mapping[str, Any] | Non
             warn(f"{type(function).__name__}: no parameters class, overrides {sorted(overrides)} ignored")
         return None
     from_profile = getattr(cls, "from_profile", None)
-    params = from_profile(profile) if callable(from_profile) and profile is not None else cls()
+    if callable(from_profile) and profile is not None:
+        # readers that also need the application settings (autofocus Z range) take them as ``settings``
+        accepts_settings = "settings" in inspect.signature(from_profile).parameters
+        params = from_profile(profile, settings=settings) if accepts_settings else from_profile(profile)
+    else:
+        params = cls()
     if overrides:
         names = {f.name for f in dataclasses.fields(cls)}
         known = {key: value for key, value in overrides.items() if key in names}

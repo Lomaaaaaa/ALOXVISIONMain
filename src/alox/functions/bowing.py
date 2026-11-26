@@ -364,27 +364,15 @@ def chuck_properties(settings: Any) -> ChuckProperties:
 
 
 def autofocus_params_from_profile(profile: Any, settings: Any, camera_type: CameraType) -> AutofocusParams:
-    """The LL autofocus parameters as ``alox_function_ll_autofocus_bundle_profile_parameters d`` bundles them
-    (``autofocus.method`` 0, ``speed`` 0, ``moveduration`` 10 s, ``step`` 0, ``subsampling`` 0.25) with the bowing
-    camera; the scan range from ``hardware.z.zminautofocus`` / ``zmaxautofocus`` (read by the LL ``Start``; defaults
-    = the shipped ``alox_default.ini`` 33.0 / 34.5 mm)."""
-    g, s = _getter(profile), _getter(settings)
-    return AutofocusParams(
-        camera_type=camera_type, speed=int(g("autofocus.speed", 0)), method=int(g("autofocus.method", 0)),
-        duration_s=int(g("autofocus.moveduration", 10)), z_min=float(s("hardware.z.zminautofocus", 33.0)),
-        z_max=float(s("hardware.z.zmaxautofocus", 34.5)), step=float(g("autofocus.step", 0.0)),
-        subsampling=float(g("autofocus.subsampling", 0.25)))
+    """The LL autofocus parameters (:meth:`AutofocusParams.from_profile`) with the bowing camera."""
+    return AutofocusParams.from_profile(profile, settings, camera_type=camera_type)
 
 
 def refocus_params_from_profile(profile: Any, camera_type: CameraType,
                                 method: AutofocusMethod = AutofocusMethod.SOBEL) -> RefocusParams:
-    """``alox_function_ll_refocus_bundle_profile_parameters d`` (``refocus.nbsteps`` 4, ``step`` 0.05 mm,
-    ``roiwidth``/``roiheight`` 128, ``waitms`` 0) with the bowing camera and ``Autofocus Method`` = Sobel (sm d92)."""
-    g = _getter(profile)
-    return RefocusParams(
-        camera_type=camera_type, method=method, steps=int(g("refocus.nbsteps", 4)),
-        step_mm=float(g("refocus.step", 0.05)), fin_roi_width=int(g("refocus.roiwidth", 128)),
-        fin_roi_height=int(g("refocus.roiheight", 128)), wait_ms=int(g("refocus.waitms", 0)))
+    """The LL refocus parameters (:meth:`RefocusParams.from_profile`) with the bowing camera and ``Autofocus Method``
+    = Sobel (sm d92)."""
+    return RefocusParams.from_profile(profile, camera_type=camera_type, method=method)
 
 
 @dataclass(frozen=True)

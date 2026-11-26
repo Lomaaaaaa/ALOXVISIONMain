@@ -274,7 +274,7 @@ def test_build_params_from_profile_defaults_and_overrides(fakes: SimpleNamespace
 
     assert params_class(Autofocus.__new__(Autofocus)) is AutofocusParams
     built = build_params(Autofocus.__new__(Autofocus), Profile(), {"camera_type": 1})
-    assert dataclasses.replace(AutofocusParams(), camera_type=1) == built          # no from_profile: defaults
+    assert built == dataclasses.replace(AutofocusParams.from_profile(Profile()), camera_type=1)   # the recipe
     assert RefocusParams(method=1).method.label == "Sobel"
 
     class Bare:

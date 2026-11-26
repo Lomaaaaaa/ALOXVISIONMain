@@ -618,3 +618,18 @@ def test_refocus_with_the_camera_device(rig, newest):
         camera.shutdown(timeout=5)
     assert result.best_z == pytest.approx(1.23)
     assert backend.device is not None and backend.device.modes == ["last new" if newest else "next"] * 7
+
+
+def test_params_from_the_recipe_and_the_settings():
+    """The LL bundle VIs: recipe keys, and the autofocus Z range from the application settings."""
+    recipe = {"autofocus.method": 1, "autofocus.speed": 1, "autofocus.moveduration": 4, "autofocus.subsampling": 0.5,
+              "refocus.nbsteps": 3, "refocus.step": 0.02, "refocus.roiwidth": 200, "refocus.roiheight": 150}
+    settings = {"hardware.z.zminautofocus": 30.0, "hardware.z.zmaxautofocus": 31.0}
+    af = AutofocusParams.from_profile(recipe, settings, camera_type=CameraType.LOW_MAG)
+    assert (af.camera_type, af.method, af.speed, af.duration_s, af.z_min, af.z_max, af.subsampling) == (
+        CameraType.LOW_MAG, AutofocusMethod.SOBEL, AutofocusSpeed.FAST, 4, 30.0, 31.0, 0.5)
+    assert (AutofocusParams.from_profile({}).z_min, AutofocusParams.from_profile({}).z_max) == (33.0, 34.5)
+    rf = RefocusParams.from_profile(recipe)
+    assert (rf.steps, rf.step_mm, rf.fin_roi_width, rf.fin_roi_height, rf.method) == (
+        3, 0.02, 200, 150, AutofocusMethod.FFT)
+    assert RefocusParams.from_profile(recipe, method="Sobel").method is AutofocusMethod.SOBEL

@@ -488,7 +488,8 @@ class Controller:
         try:
             function = self.core.functions.function(row.function)
             profile = self.core.profile_manager if self.core.profile_manager.current is not None else None
-            params = build_params(function, profile, button.overrides, warn=self.core.log.warning)
+            params = build_params(function, profile, button.overrides, warn=self.core.log.warning,
+                                  settings=self.core.properties)
             self.core.functions.start(row.function, params)
         except (FunctionBusy, KeyError) as exc:
             return ActionResult(False, f"{row.label}: {exc}")

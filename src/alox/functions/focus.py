@@ -215,6 +215,14 @@ def _set(obj: object, name: str, value: Any) -> None:
     object.__setattr__(obj, name, value)
 
 
+def _profile_value(store: Any, dotted: str, default: Any) -> Any:
+    """``store.get(dotted, default)`` (a recipe or the settings); ``default`` when there is no store or no value."""
+    if store is None:
+        return default
+    value = store.get(dotted, default)
+    return default if value is None else value
+
+
 @dataclass(frozen=True)
 class AutofocusParams:
     """``Camera Autofocus Data`` (§2.2), in cluster order; defaults = the typedef defaults (which are invalid: a start
@@ -230,6 +238,21 @@ class AutofocusParams:
     subsampling: float = 0.0                              # metric Scale Factor
     roi: tuple[int, ...] = ()                             # [Left, Top, Right, Bottom]; empty = whole image
     acquisition_timeout_ms: int = 5000                    # not used (D7)
+
+    @classmethod
+    def from_profile(cls, profile: Any, settings: Any = None, *,
+                     camera_type: CameraType | int | str = CameraType.HIGH_MAG) -> AutofocusParams:
+        """``alox_function_ll_autofocus_bundle_profile_parameters d``: ``autofocus.method`` (0), ``speed`` (0),
+        ``moveduration`` (10 s), ``step`` (0), ``subsampling`` (0.25) of the recipe; the scan range is the
+        application's ``hardware.z.zminautofocus`` / ``zmaxautofocus`` (``settings``; defaults = the shipped
+        ``alox_default.ini`` 33.0 / 34.5 mm), as the LL ``Start`` reads it."""
+        return cls(camera_type=camera_type, speed=int(_profile_value(profile, "autofocus.speed", 0)),
+                   method=int(_profile_value(profile, "autofocus.method", 0)),
+                   duration_s=int(_profile_value(profile, "autofocus.moveduration", 10)),
+                   z_min=float(_profile_value(settings, "hardware.z.zminautofocus", 33.0)),
+                   z_max=float(_profile_value(settings, "hardware.z.zmaxautofocus", 34.5)),
+                   step=float(_profile_value(profile, "autofocus.step", 0.0)),
+                   subsampling=float(_profile_value(profile, "autofocus.subsampling", 0.25)))
 
     def __post_init__(self) -> None:
         _set(self, "camera_type", CameraType.coerce(self.camera_type, "Camera Type"))
@@ -256,6 +279,21 @@ class RefocusParams:
     wait_ms: int = 0                                       # settle pause once a position is reached
     save_images: bool = False                              # one PNG per position (§8)
     folder: str | Path = ""                                # existing folder of the PNG files (not created)
+
+    @classmethod
+    def from_profile(cls, profile: Any, settings: Any = None, *,
+                     camera_type: CameraType | int | str = CameraType.HIGH_MAG,
+                     method: AutofocusMethod | int | str | None = None) -> RefocusParams:
+        """``alox_function_ll_refocus_bundle_profile_parameters d``: ``refocus.method`` (0), ``nbsteps`` (4),
+        ``step`` (0.05 mm), ``roiwidth`` / ``roiheight`` (128), ``waitms`` (0) of the recipe (``refocus.offset`` has
+        no field here). ``method`` replaces the recipe's (callers that force Sobel: bowing, the Low Mag refocus)."""
+        return cls(camera_type=camera_type,
+                   method=int(_profile_value(profile, "refocus.method", 0)) if method is None else method,
+                   steps=int(_profile_value(profile, "refocus.nbsteps", 4)),
+                   step_mm=float(_profile_value(profile, "refocus.step", 0.05)),
+                   fin_roi_width=int(_profile_value(profile, "refocus.roiwidth", 128)),
+                   fin_roi_height=int(_profile_value(profile, "refocus.roiheight", 128)),
+                   wait_ms=int(_profile_value(profile, "refocus.waitms", 0)))
 
     def __post_init__(self) -> None:
         _set(self, "camera_type", CameraType.coerce(self.camera_type, "Camera Type"))
