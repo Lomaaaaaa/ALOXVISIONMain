@@ -55,6 +55,7 @@ from alox.core.users import UserAction, UserType
 from alox.devices.base import DeviceError, DeviceState
 from alox.events import Event
 from alox.ui.adapters import ImageProvider, build_params, stage_to_wafer, wafer_to_stage
+from alox.ui.settings_panels import SettingsModel, panel_by_name
 
 __all__ = ["ROWS", "TOPICS", "ActionResult", "Controller", "FunctionRow", "Snapshot", "StartButton", "StatusLook",
            "Tab", "look_of"]
@@ -538,12 +539,24 @@ class Controller:
 
     def open_options(self, row_key: str) -> ActionResult:
         """A gear button: the function's settings panel in the SETTINGS tab (``alox_manager_panels`` "Open Panel";
-        the panels are not ported yet: the window shows a placeholder)."""
+        ``data`` = the panel name, which the window opens with :meth:`settings_model`)."""
         row = _ROWS[row_key]
         if not self.options_enabled(row):
             return ActionResult(False, f"{row.label}: not allowed for {self.user.label}")
         self.core.log.info(f"{row.panel} settings (clicked)")
         return ActionResult(True, row.panel, Tab.SETTINGS, row.panel)
+
+    def settings_model(self, panel: str) -> SettingsModel | None:
+        """The editing model of the settings panel named ``panel`` (:mod:`alox.ui.settings_panels`) on the active
+        profile, enabled by the panel's ``<Function> Setup`` right; None when no such panel is ported."""
+        spec = panel_by_name(panel)
+        if spec is None:
+            return None
+        return SettingsModel(spec, self.core.profile_manager, allowed=lambda: self.can(spec.action))
+
+    def function_running(self, row_key: str) -> bool:
+        """True while the function of the row runs (a settings change then applies to its next run)."""
+        return self.core.functions.running == _ROWS[row_key].function
 
     def open_settings(self) -> ActionResult:
         """SETTINGS: right "Edit Properties", the properties UI ("Vision Core") in the SETTINGS tab."""

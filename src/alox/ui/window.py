@@ -11,8 +11,12 @@ may block (devices, a function's stop) runs in the actions worker; the producer'
 (:meth:`Controller.poll`, every ``general.displaytimer`` ms) in the poll worker; the image (``merged()``) is rendered
 in the image worker and shown when its key changes (:func:`alox.ui.adapters.image_key`, checked every 100 ms).
 
-Placeholders (next steps): the function settings panels (gear buttons) and the properties UI in the SETTINGS tab,
-the low- and high-level results panels (the tabs show the function states and the measurement statuses meanwhile),
+Function settings panels: a gear button opens the function's panel (:class:`alox.ui.settings_form.SettingsPanel`
+on :mod:`alox.ui.settings_panels`) in the SETTINGS tab, one at a time as ``alox_manager_panels`` (opening another one
+closes it, asking before pending edits are dropped); it follows the user's right and reloads when the active profile
+changes.
+
+Placeholders (next steps): the properties UI in the SETTINGS tab, the low- and high-level results panels (the tabs show the function states and the measurement statuses meanwhile),
 the profiles editor, the optical viewfinder and the thermal measurement.
 """
 
@@ -65,6 +69,7 @@ from alox.ui.controller import (
     Snapshot,
     Tab,
 )
+from alox.ui.settings_form import SettingsPanel
 from alox.ui.widgets import ImageView, LoginDialog, LogWindow, StatusIndicator, Tool
 
 __all__ = ["NEXT_STEPS", "MainWindow"]
@@ -73,7 +78,8 @@ log = logging.getLogger(__name__)
 
 #: The UI steps still to do, in order (shown in the placeholders and the report).
 NEXT_STEPS = (
-    "Function settings panels (the ⚙ buttons: ui_config of the 13 functions) in the SETTINGS tab",
+    ("Function settings panels: Refocus Oxyd (no ⚙ button on the LabVIEW panel), the panels' own tools (learning, "
+     "exposure tables, test runs)"),
     "Properties UI (SETTINGS button: alox_properties_ui and its tabs, with the per-tab rights)",
     "Low-level results panels (LOW-LEVEL MEASUREMENTS tab: ui_run of each function)",
     "High-level results panels (HIGH-LEVEL MEASUREMENTS tab: mesa / tilt / bowing results and job infos)",
@@ -115,6 +121,7 @@ class MainWindow(QMainWindow):
         self.poll_worker = Worker("ui-poll", self)
         self.image_worker = Worker("ui-image", self)
         self.log_window: LogWindow | None = None
+        self.settings_panel: SettingsPanel | None = None
 
         self.setWindowTitle(controller.title())
         self._build_toolbar()
@@ -397,9 +404,13 @@ class MainWindow(QMainWindow):
         column.addLayout(top)
 
         self.tabs = QTabWidget()
+        self.settings_host = QWidget()
+        self.settings_layout = QVBoxLayout(self.settings_host)
+        self.settings_layout.setContentsMargins(0, 0, 0, 0)
         self.settings_page = QLabel()
         self.settings_page.setWordWrap(True)
         self.settings_page.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.settings_layout.addWidget(self.settings_page)
         self._settings_placeholder(None)
         self.low_page = QListWidget()
         self.high_page = QWidget()
@@ -413,7 +424,7 @@ class MainWindow(QMainWindow):
         note.setStyleSheet("color: #666;")
         high_layout.addWidget(note)
         high_layout.addStretch(1)
-        self.tabs.addTab(self.settings_page, Tab.SETTINGS.label)
+        self.tabs.addTab(self.settings_host, Tab.SETTINGS.label)
         self.tabs.addTab(self.low_page, Tab.LOW_LEVEL.label)
         self.tabs.addTab(self.high_page, Tab.HIGH_LEVEL.label)
         column.addWidget(self.tabs, 1)
@@ -429,10 +440,47 @@ class MainWindow(QMainWindow):
             bar.addPermanentWidget(widget)
 
     def _settings_placeholder(self, panel: str | None) -> None:
+        self._drop_panel()
         steps = "".join(f"<li>{step}</li>" for step in NEXT_STEPS[:2])
         title = f"<b>{panel}</b>: settings panel not ported yet." if panel else "No settings panel open."
         self.settings_page.setText(f"<p>{title}</p><p>Next UI steps for this tab:</p><ul>{steps}</ul>")
+        self.settings_page.show()
         self.tabs_caption(panel)
+
+    # ============================================================================================== settings panels
+    def show_settings(self, panel: str) -> None:
+        """"Open Panel": the settings panel named ``panel`` in the SETTINGS tab (one at a time), else the
+        placeholder. A panel with pending edits is asked about first and kept open on "No"."""
+        current = self.settings_panel
+        if current is not None:
+            if current.spec.name == panel:
+                return
+            if current.model.dirty and not self.confirm(f"Discard the changes of {current.spec.name}?"):
+                return
+        model = self.controller.settings_model(panel)
+        if model is None:
+            self._settings_placeholder(panel)
+            return
+        self._drop_panel()
+        self.settings_page.hide()
+        widget = SettingsPanel(model, on_close=self.close_settings,
+                               running=lambda row=model.spec.row: self.controller.function_running(row),
+                               confirm=self.confirm,
+                               on_result=lambda text: self.statusBar().showMessage(text, 8000))
+        self.settings_layout.addWidget(widget, 1)
+        self.settings_panel = widget
+        self.tabs_caption(panel)
+
+    def close_settings(self) -> None:
+        """"Close Panel": back to the empty SETTINGS tab."""
+        self._settings_placeholder(None)
+
+    def _drop_panel(self) -> None:
+        panel, self.settings_panel = self.settings_panel, None
+        if panel is not None:
+            self.settings_layout.removeWidget(panel)
+            panel.setParent(None)
+            panel.deleteLater()
 
     def tabs_caption(self, panel: str | None) -> None:
         """The SETTINGS tab caption "SETTINGS (<panel title>)" (producer ``Timeout`` frame 4)."""
@@ -469,6 +517,8 @@ class MainWindow(QMainWindow):
             if row.key in self.option_buttons:
                 self.option_buttons[row.key].setEnabled(c.options_enabled(row))
         self.camera.setEnabled(c.core.functions.condition_ok())
+        if self.settings_panel is not None:
+            self.settings_panel.refresh_rights()
 
     def refresh_texts(self) -> None:
         c = self.controller
@@ -506,6 +556,8 @@ class MainWindow(QMainWindow):
         if parts & {"profile", "profiles"}:
             self.refresh_profiles_box()
             self.refresh_texts()
+        if "profile" in parts and self.settings_panel is not None:
+            self.settings_panel.reload()
         if "measures" in parts:
             self.refresh_measures()
         if "tab" in parts:
@@ -587,7 +639,7 @@ class MainWindow(QMainWindow):
         if result.tab is not None:
             self.tabs.setCurrentIndex(int(result.tab))
         if result.tab is Tab.SETTINGS and isinstance(result.data, str):
-            self._settings_placeholder(result.data)
+            self.show_settings(result.data)
         self.refresh_functions()
         self.refresh_texts()
 
@@ -631,7 +683,7 @@ class MainWindow(QMainWindow):
         def show(result: ActionResult) -> None:
             if result.ok:
                 self.tabs.setCurrentIndex(int(Tab.SETTINGS))
-                self._settings_placeholder("Profiles editor")
+                self.show_settings("Profiles editor")
         return self._act(self.controller.edit_profiles, then=show)
 
     def clear_alarm(self) -> None:
