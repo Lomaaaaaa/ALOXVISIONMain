@@ -17,6 +17,7 @@ from alox.vision.circles import (
     contour_diameters,
     fit_circle_least_squares,
     inscribed_circle,
+    labview_mzc_circles,
     minimum_zone_circles,
     perimeter_equivalent_diameter,
     polygon_area,
@@ -211,12 +212,44 @@ def test_mzc_constraints_hold_on_noisy_contour():
     d = r.outer.radial_distances(pts)
     assert np.all(d <= r.outer.radius + 1e-6)
     assert np.all(d >= r.inner.radius - 1e-6)
+    assert r.mzc_minimum == pytest.approx(r.zone_width)
+
+
+def test_true_minimum_zone_is_never_wider_than_labviews():
+    """Owner M9: the true minimum zone (minimum radial separation) against LabVIEW's sum-of-squares "MZC"."""
+    rng = np.random.default_rng(11)
+    for _ in range(5):
+        pts = ellipse_points(30.0, 28.0, n=360) + rng.normal(0.0, 0.2, (360, 2))
+        true, lv = minimum_zone_circles(pts), labview_mzc_circles(pts)
+        assert true.success and lv.success
+        assert true.zone_width <= lv.zone_width + 1e-9
+
+
+def test_true_minimum_zone_matches_a_brute_force_search():
+    rng = np.random.default_rng(3)
+    pts = circle_points(5.0, -2.0, 10.0, n=90) + rng.normal(0.0, 0.15, (90, 2))
+    r = minimum_zone_circles(pts)
+    grid = np.linspace(-0.3, 0.3, 241)
+    best = min(float(np.ptp(np.hypot(pts[:, 0] - (r.outer.x + dx), pts[:, 1] - (r.outer.y + dy))))
+               for dx in grid for dy in grid)
+    assert r.zone_width <= best + 1e-6                    # no centre near the optimum gives a thinner zone
+
+
+def test_labview_mzc_constraints_hold_on_noisy_contour():
+    rng = np.random.default_rng(5)
+    pts = circle_points(0.0, 0.0, 30.0, n=200) + rng.normal(0.0, 0.3, (200, 2))
+    r = labview_mzc_circles(pts)
+    assert r.success
+    d = r.outer.radial_distances(pts)
+    assert np.all(d <= r.outer.radius + 1e-6)
+    assert np.all(d >= r.inner.radius - 1e-6)
 
 
 def test_mzc_degenerate_input():
-    r = minimum_zone_circles([(0, 0), (1, 1)])
-    assert not r.success
-    assert r.outer.is_nan and r.inner.is_nan and r.lsc.is_nan
+    for fit in (minimum_zone_circles, labview_mzc_circles):
+        r = fit([(0, 0), (1, 1)])
+        assert not r.success
+        assert r.outer.is_nan and r.inner.is_nan and r.lsc.is_nan
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -234,20 +267,33 @@ def test_circularity_nan_rules(c, i):
     assert math.isnan(circularity(c, i))
 
 
-def test_contour_diameters_circle():
-    res = contour_diameters(circle_points(1224.0, 1024.0, 30.0, n=720))
-    assert not res.used_fallback
+@pytest.mark.parametrize("method", ["iso", "labview"])
+def test_contour_diameters_circle(method):
+    res = contour_diameters(circle_points(1224.0, 1024.0, 30.0, n=720), method=method)
+    assert not res.used_fallback and res.method == method
     assert res.fit == pytest.approx(60.0)
-    assert res.inscribed == pytest.approx(60.0, abs=1e-6)
+    assert res.inscribed == pytest.approx(60.0, abs=1e-3)
     assert res.circumscribed == pytest.approx(60.0, abs=1e-6)
     assert res.surface == pytest.approx(60.0, rel=1e-4)
-    assert res.circularity == pytest.approx(1.0, abs=1e-6)
+    assert res.circularity == pytest.approx(1.0, abs=1e-4)
+
+
+def test_contour_diameters_iso_uses_the_exact_circles():
+    """Owner M9: circumscribed = minimum circumscribed circle, inscribed = maximum inscribed circle."""
+    pts = ellipse_points(4.0, 2.0, n=720)
+    iso = contour_diameters(pts)
+    assert iso.method == "iso" and not iso.used_fallback
+    assert iso.circumscribed == pytest.approx(8.0, abs=1e-9)
+    assert iso.inscribed == pytest.approx(4.0, abs=0.02)
+    assert iso.roundness.zone_width == pytest.approx(2.0, abs=1e-3)
+    with pytest.raises(ValueError):
+        contour_diameters(pts, method="best")
 
 
 def test_contour_diameters_ellipse_with_and_without_mzc():
     pts = ellipse_points(4.0, 2.0, n=720)
-    mzc = contour_diameters(pts)
-    geo = contour_diameters(pts, use_mzc=False)
+    mzc = contour_diameters(pts, method="labview")
+    geo = contour_diameters(pts, method="labview", use_mzc=False)
     assert geo.used_fallback
     assert mzc.circumscribed == pytest.approx(8.0, abs=1e-3)
     assert geo.circumscribed == pytest.approx(8.0, abs=1e-9)
@@ -258,7 +304,8 @@ def test_contour_diameters_ellipse_with_and_without_mzc():
 
 
 def test_contour_diameters_degenerate_contour_gives_nan():
-    res = contour_diameters([(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)])
+    assert math.isnan(contour_diameters([(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]).inscribed)
+    res = contour_diameters([(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)], method="labview")
     assert res.used_fallback
     assert math.isnan(res.surface)  # zero area -> 0 -> NaN
     assert math.isnan(res.inscribed)

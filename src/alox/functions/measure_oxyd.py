@@ -27,7 +27,8 @@ store). The results are in **pixels**, as LabVIEW's; :attr:`MeasureOxydReport.di
 4. diameters (pixels): Fit = 2·R of the fitted circle; Mean, Median, STDDEV = 2 × mean, median, sample standard
    deviation of the distances of the used points to the fitted centre (``Use Fitted Circle Center``; to the
    circumscribed centre for the measure type ``Circumscribed``); Surface, Inscribed, Circumscribed from
-   :func:`alox.vision.circles.contour_diameters` (minimum-zone circles, Elzinga–Hearn / Delaunay fallback, 0 → NaN);
+   :func:`alox.vision.circles.contour_diameters` (owner M9: the exact minimum circumscribed and maximum inscribed
+   circles; LabVIEW's minimum-zone variant with its Elzinga–Hearn / Delaunay fallback is ``method="labview"``; 0 → NaN);
    ``Circ/Insc Ratio`` = circumscribed / inscribed; ``Accuracy`` = 100·(circumscribed − inscribed)/inscribed (as read
    in ``d40``: this is the subtraction of owner question M3, it feeds Accuracy, not the ratio); External = 2·R of the
    external circle; one chord line per used point (through the centre) and its length;

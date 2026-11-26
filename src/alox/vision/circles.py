@@ -9,6 +9,14 @@ Spec: ``docs/vision-core/map.md`` Part 4 §3.7 and Part 3 §3.10 (measure mesa).
 Units: whatever the points are in (pixels in LabVIEW; ``alox_tools_convert_mesa_measures_to_micrometers d`` then
 multiplies the seven diameters External…Circumscribed by the pixel size, ×1000 when the calibration unit is mm).
 
+Owner's decision M9 ("I would highly prefer a better algorithm"): the mesa and oxide diameters use the standard roundness
+definitions of ISO 12181-1 by default: circumscribed = minimum circumscribed circle (exact, Elzinga–Hearn), inscribed =
+maximum inscribed circle (exact for a point set: the largest empty circle centred inside the hull, Delaunay), roundness
+= true minimum zone (two concentric circles of minimum radial separation, :func:`minimum_zone_circles`, sequential
+linear programming). LabVIEW's combination (its own "MZC" with a sum-of-squares cost, Elzinga–Hearn/Delaunay only when
+it fails) stays available as :func:`labview_mzc_circles` and ``contour_diameters(method="labview")`` to compare with
+recorded LabVIEW results.
+
 NaN rules kept from LabVIEW: a failed construction returns :data:`NAN_CIRCLE` ``{NaN, NaN, NaN}`` (Error case of every
 VI, Elzinga–Hearn after 20 000 iterations, no Delaunay circle); :func:`contour_diameters` turns a 0 diameter into NaN
 (``ZERO->NAN`` nodes of ``alox_function_ll_measure_mesa_state_machine d40``).
@@ -31,6 +39,7 @@ from scipy import optimize, spatial
 from .geometry import PointsLike, as_points
 
 __all__ = [
+    "DIAMETER_METHODS",
     "NAN_CIRCLE",
     "Circle",
     "ContourDiameters",
@@ -41,6 +50,7 @@ __all__ = [
     "contour_diameters",
     "fit_circle_least_squares",
     "inscribed_circle",
+    "labview_mzc_circles",
     "minimum_zone_circles",
     "perimeter_equivalent_diameter",
     "polygon_area",
@@ -349,12 +359,14 @@ def inscribed_circle(points: PointsLike, *, allow_center_outside_hull: bool = Fa
 
 @dataclass(frozen=True)
 class Roundness:
-    """Outputs of ``RoundnessCalculations-NI`` (MIC/MCC are in a Disabled frame and not produced)."""
+    """Least-squares circle and a pair of concentric outer/inner circles: the true minimum zone
+    (:func:`minimum_zone_circles`, ``mzc_minimum`` = the zone width) or LabVIEW's ``RoundnessCalculations-NI``
+    (:func:`labview_mzc_circles`, ``mzc_minimum`` = its sum-of-squares objective)."""
 
     lsc: Circle  # least-squares circle
     lsc_minimum: float  # Σ (d_i − R)² of the LSC (NI "residue" definition not visible; inferred)
-    outer: Circle  # "Cir": outer MZC circle
-    inner: Circle  # "Ins": inner MZC circle
+    outer: Circle  # "Cir": outer circle of the zone
+    inner: Circle  # "Ins": inner circle of the zone
     mzc_minimum: float  # objective value at the optimum
     success: bool  # False = the optimiser failed (LabVIEW: error out set)
 
@@ -363,8 +375,65 @@ class Roundness:
         return self.outer.radius - self.inner.radius
 
 
-def minimum_zone_circles(points: PointsLike, *, max_iterations: int = 500, tolerance: float = 1e-10) -> Roundness:
-    """Concentric outer/inner circles as ``RoundnessCalculations-NI d`` + ``MZC cost cno d`` compute them.
+def minimum_zone_circles(points: PointsLike, *, max_iterations: int = 200, tolerance: float = 1e-12) -> Roundness:
+    """The true minimum zone (ISO 12181-1 MZCI): the centre minimising ``max d_i − min d_i`` and its two concentric
+    circles (outer = max distance, inner = min distance); ``mzc_minimum`` is the zone width (owner's decision M9).
+
+    Sequential linear programming from the least-squares centre: at each step the distances are linearised around the
+    current centre, ``d_i + g_i·δ`` with ``g_i`` the unit vector from point i to the centre, and the linear program
+    ``min t_out − t_in`` subject to ``t_in ≤ d_i + g_i·δ ≤ t_out`` and ``|δ| ≤ trust`` (SciPy HiGHS) gives the step; a
+    step is kept only if the true width decreases, and the trust radius grows or shrinks accordingly. Work is done in
+    coordinates scaled by the LSC radius. Fewer than 3 points or no LSC → ``success = False`` and NaN circles."""
+    pts = as_points(points)
+    lsc = fit_circle_least_squares(pts)
+    if lsc.is_nan or pts.shape[0] < 3:
+        return Roundness(lsc if not lsc.is_nan else NAN_CIRCLE, math.nan, NAN_CIRCLE, NAN_CIRCLE, math.nan, False)
+    origin = np.array([lsc.x, lsc.y])
+    scale = max(lsc.radius, 1e-300)
+    u = (pts - origin) / scale
+    lsc_minimum = float(np.sum((np.hypot(u[:, 0], u[:, 1]) - 1.0) ** 2)) * scale**2
+
+    def distances(center: np.ndarray) -> np.ndarray:
+        return np.hypot(u[:, 0] - center[0], u[:, 1] - center[1])
+
+    center = np.zeros(2)
+    d = distances(center)
+    width = float(d.max() - d.min())
+    trust = 0.1
+    n = u.shape[0]
+    cost = np.array([0.0, 0.0, 1.0, -1.0])
+    for _ in range(max_iterations):
+        safe = np.where(d == 0.0, 1.0, d)
+        g = (center - u) / safe[:, None]
+        a_ub = np.zeros((2 * n, 4))
+        a_ub[:n, :2], a_ub[:n, 2] = g, -1.0                       # d + g·δ − t_out ≤ 0
+        a_ub[n:, :2], a_ub[n:, 3] = -g, 1.0                       # t_in − d − g·δ ≤ 0
+        b_ub = np.concatenate((-d, d))
+        res = optimize.linprog(cost, A_ub=a_ub, b_ub=b_ub, method="highs",
+                               bounds=[(-trust, trust), (-trust, trust), (None, None), (None, None)])
+        if not res.success:
+            break
+        step = res.x[:2]
+        candidate = center + step
+        d_new = distances(candidate)
+        width_new = float(d_new.max() - d_new.min())
+        if width_new < width - 1e-15:
+            center, d, width = candidate, d_new, width_new
+            if np.max(np.abs(step)) >= 0.9 * trust:
+                trust *= 2.0
+        else:
+            trust *= 0.25
+        if trust < tolerance or float(np.max(np.abs(step))) < tolerance:
+            break
+    c = origin + center * scale
+    return Roundness(lsc=lsc, lsc_minimum=lsc_minimum, outer=Circle(float(c[0]), float(c[1]), float(d.max() * scale)),
+                     inner=Circle(float(c[0]), float(c[1]), float(d.min() * scale)), mzc_minimum=width * scale,
+                     success=True)
+
+
+def labview_mzc_circles(points: PointsLike, *, max_iterations: int = 500, tolerance: float = 1e-10) -> Roundness:
+    """Concentric outer/inner circles as ``RoundnessCalculations-NI d`` + ``MZC cost cno d`` compute them (LabVIEW's
+    fit, kept to compare with recorded results; the default is :func:`minimum_zone_circles`, owner M9).
 
     Variables ``X = [xc, yc, R_out, R_in]``, started at the LSC centre with the "feasible radii"
     ``R_out = 1.01·max r_i`` and ``R_in = 0.99·min r_i`` (``r_i`` = distances to the LSC centre). Constraints
@@ -469,14 +538,23 @@ class ContourDiameters:
     inscribed: float
     circumscribed: float
     circularity: float  # circumscribed / inscribed
-    roundness: Roundness
-    used_fallback: bool  # True when the MZC failed and Delaunay / Elzinga–Hearn were used
+    roundness: Roundness  # minimum zone ("iso") or LabVIEW's MZC ("labview")
+    used_fallback: bool  # "labview": True when its MZC failed and Delaunay / Elzinga–Hearn were used
+    method: str = "iso"
 
 
-def contour_diameters(points: PointsLike, *, use_mzc: bool = True) -> ContourDiameters:
-    """Diameters of one contour as the measure-mesa state machine assembles them.
+#: :func:`contour_diameters` methods.
+DIAMETER_METHODS = ("iso", "labview")
 
-    As read in ``alox_function_ll_measure_mesa_state_machine d40``: AREA → surface diameter; circumscribed and inscribed
+
+def contour_diameters(points: PointsLike, *, method: str = "iso", use_mzc: bool = True) -> ContourDiameters:
+    """Diameters of one contour.
+
+    ``method="iso"`` (default, owner's decision M9): circumscribed = minimum circumscribed circle
+    (:func:`circumscribed_circle`), inscribed = maximum inscribed circle (:func:`inscribed_circle`), ``roundness`` =
+    the true minimum zone (:func:`minimum_zone_circles`, its width in ``roundness.mzc_minimum``).
+
+    ``method="labview"``: as the measure-mesa state machine assembles them. As read in ``alox_function_ll_measure_mesa_state_machine d40``: AREA → surface diameter; circumscribed and inscribed
     radii are taken from the MZC outer/inner circles (``RoundnessCalculations-NI``) and replaced by Elzinga–Hearn
     (:func:`circumscribed_circle`) / Delaunay (:func:`inscribed_circle`) when the MZC returns an error; each radius is
     doubled, then ``0 → NaN``. ``use_mzc=False`` always uses Elzinga–Hearn/Delaunay (the geometric definitions).
@@ -484,9 +562,18 @@ def contour_diameters(points: PointsLike, *, use_mzc: bool = True) -> ContourDia
     diameter: that dead fallback is not reproduced. The "fit" diameter here is the LSC; in LabVIEW the Fit field comes
     from ``IMAQ Fit Circle 2`` on the edge points (part 3, not in this module).
     """
+    if method not in DIAMETER_METHODS:
+        raise ValueError(f"method must be one of {DIAMETER_METHODS}, not {method!r}")
     pts = as_points(points)
     surface, area = surface_equivalent_diameter(pts)
-    roundness = minimum_zone_circles(pts) if use_mzc else Roundness(
+    if method == "iso":
+        roundness = minimum_zone_circles(pts)
+        circ = _zero_to_nan(circumscribed_circle(pts).diameter)
+        insc = _zero_to_nan(inscribed_circle(pts).diameter)
+        return ContourDiameters(fit=_zero_to_nan(roundness.lsc.diameter), surface=_zero_to_nan(surface), area=area,
+                                inscribed=insc, circumscribed=circ, circularity=circularity(circ, insc),
+                                roundness=roundness, used_fallback=False, method=method)
+    roundness = labview_mzc_circles(pts) if use_mzc else Roundness(
         fit_circle_least_squares(pts), math.nan, NAN_CIRCLE, NAN_CIRCLE, math.nan, False)
     fallback = not roundness.success
     if fallback:
@@ -504,5 +591,6 @@ def contour_diameters(points: PointsLike, *, use_mzc: bool = True) -> ContourDia
         circularity=circularity(circ, insc),
         roundness=roundness,
         used_fallback=fallback,
+        method=method,
     )
 
