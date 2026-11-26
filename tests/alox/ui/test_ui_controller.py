@@ -15,7 +15,13 @@ from alox.core.core import Core, MeasureRequest
 from alox.core.functions import FunctionName, FunctionStatus
 from alox.core.users import UserType
 from alox.events import Event
-from alox.ui.adapters import build_params, image_key, params_class, stage_to_wafer, wafer_to_stage
+from alox.ui.adapters import (
+    build_params,
+    image_key,
+    params_class,
+    stage_to_wafer,
+    wafer_to_stage,
+)
 from alox.ui.controller import ROWS, STATUS_COLOURS, Controller, Tab, look_of
 
 
@@ -62,7 +68,8 @@ def test_status_looks_use_labview_colours_and_texts(core: Core, register: Callab
     assert look_of(FunctionStatus.FINISHED).background == "#66ff00"
 
 
-def test_start_buttons_follow_rights_registration_and_condition(core: Core, register: Callable[..., Any], wait_until: Callable[..., None]):
+def test_start_buttons_follow_rights_registration_and_condition(core: Core, register: Callable[..., Any],
+                                                                wait_until: Callable[..., None]):
     probes = register(core, FunctionName.AUTOFOCUS_LARGE, FunctionName.REFOCUS)
     c = Controller(core)
     assert c.user is UserType.OPERATOR                                              # owner decision B6
@@ -80,7 +87,8 @@ def test_start_buttons_follow_rights_registration_and_condition(core: Core, regi
 
 
 # ============================================================================================== starts and stops
-def test_low_level_start_bundles_the_profile_parameters(core: Core, devices: dict[str, Any], register: Callable[..., Any], fakes: SimpleNamespace):
+def test_low_level_start_bundles_the_profile_parameters(core: Core, devices: dict[str, Any],
+                                                        register: Callable[..., Any], fakes: SimpleNamespace):
     probe = register(core, FunctionName.AUTOFOCUS_LARGE)[FunctionName.AUTOFOCUS_LARGE]
     core.profile_manager.set("probe.value", 7.25)
     core.properties.set("general.camera", 0)
@@ -124,7 +132,9 @@ def test_refocus_low_mag_uses_sobel_and_the_refocus_oxyd_right(core: Core, regis
     c.stop("AF_OXYD")
 
 
-def test_high_level_start_goes_through_the_command_bus(core: Core, devices: dict[str, Any], register: Callable[..., Any], wait_until: Callable[..., None]):
+def test_high_level_start_goes_through_the_command_bus(core: Core, devices: dict[str, Any],
+                                                       register: Callable[..., Any],
+                                                       wait_until: Callable[..., None]):
     probes = register(core, FunctionName.MESA_MEASURE, FunctionName.TILT_MEASURE)
     c = Controller(core)
     result = c.press("MES_MESA_RUN_SINGLE_BTN")
@@ -211,7 +221,8 @@ def test_moves_wavelength_joysticks_and_refresh(core: Core, devices: dict[str, A
     assert not c.move("x", 0.0, 0.0).ok and c.poll().xy_joystick is None
 
 
-def test_joystick_refused_while_a_high_level_function_runs(core: Core, devices: dict[str, Any], register: Callable[..., Any]):
+def test_joystick_refused_while_a_high_level_function_runs(core: Core, devices: dict[str, Any],
+                                                           register: Callable[..., Any]):
     probe = register(core, FunctionName.BOWING_MEASURE)[FunctionName.BOWING_MEASURE]
     c = Controller(core)
     core.functions.start(FunctionName.BOWING_MEASURE)
@@ -254,7 +265,8 @@ def test_build_params_from_profile_defaults_and_overrides(fakes: SimpleNamespace
 
     probe = fakes.Probe(FunctionName.TRACKING)
     assert params_class(probe) is fakes.ProbeParams
-    assert build_params(probe, Profile(), {"method": 2, "nope": 1}, warn=warnings.append) == fakes.ProbeParams(0, 2, 3.0)
+    built = build_params(probe, Profile(), {"method": 2, "nope": 1}, warn=warnings.append)
+    assert built == fakes.ProbeParams(0, 2, 3.0)
     assert warnings and "nope" in warnings[0]
     assert build_params(probe, None) == fakes.ProbeParams()
 

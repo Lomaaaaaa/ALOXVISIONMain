@@ -58,7 +58,7 @@ def image_key(provider: ImageProvider | None) -> tuple[Any, ...] | None:
             if callable(overlay):
                 try:
                     key.append(bool(overlay(name)))
-                except Exception:                                   # noqa: BLE001 - a switch read must not break the display
+                except Exception:                                   # noqa: BLE001 - must not break the display
                     key.append(None)
     return tuple(key)
 
@@ -117,7 +117,8 @@ def build_params(function: Any, profile: Any, overrides: Mapping[str, Any] | Non
 # ================================================================================================== coordinates
 def stage_to_wafer(x: float, y: float, origin: tuple[float, float], system: int) -> tuple[float, float]:
     """Stages → Wafer (map Part 2 §2.9): systems 0..3 = #1..#4; X indirect for #2 and #4, Y indirect for #3 and #4
-    (indirect ``w = O − p``, direct ``w = p − O``). Same formula as :func:`alox.functions.get_image.stage_to_wafer`."""
+    (indirect ``w = O − p``, direct ``w = p − O``); the formula of
+    :func:`alox.functions.get_image.stage_to_wafer`."""
     ox, oy = origin
     wx = ox - x if system in (1, 3) else x - ox
     wy = oy - y if system in (2, 3) else y - oy

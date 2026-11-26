@@ -627,7 +627,7 @@ class Controller:
         self.core.users.logout()
         return ActionResult(True, f"user {self.user.label}")
 
-    # ============================================================================================== stages, monochromator
+    # ====================================================================================== stages, monochromator
     def _wafer_frame(self) -> tuple[tuple[float, float], int]:
         props = self.core.properties
         origin = (float(props.get("hardware.xy.waferxorg", 0.0) or 0.0),

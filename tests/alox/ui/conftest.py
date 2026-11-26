@@ -17,10 +17,14 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from alox.core.core import Core, CoreConfig  # noqa: E402 - after the Qt platform choice
-from alox.core.folders import Folders  # noqa: E402
-from alox.core.functions import FunctionContext, FunctionName, MeasurementFunction  # noqa: E402
-from alox.devices.base import DeviceState  # noqa: E402
+from alox.core.core import Core, CoreConfig
+from alox.core.folders import Folders
+from alox.core.functions import (
+    FunctionContext,
+    FunctionName,
+    MeasurementFunction,
+)
+from alox.devices.base import DeviceState
 
 SYSTEM_LANG = "000100;System initialized\n000200;Starting\n000203;Mesa running\n000500;Idle\n"
 ALOX_LANG = ("000039;OFF;   function status 'OFF'\n000040;OFF OK;  function status 'OFF COND OK'\n"
