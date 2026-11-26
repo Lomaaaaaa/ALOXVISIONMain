@@ -69,11 +69,18 @@ Fixed (internal defects, or no observable effect):
 
 Choices of this implementation:
 
-- **Images**: LabVIEW grabs through ``alox_function_ll_get_image`` Run Once with Exposure Mode "Current" (no exposure
-  change, no wait in Get Image). The default here grabs the newest frame of the camera device directly and stores it
-  with :meth:`ImageSink.put`; ``acquire=`` injects another grabber (e.g. one that runs the Get Image function).
-- **Waits** (Q5 / questions B3): :class:`WaitRule` ``AS_DRAWN`` (default) = the Wait-state formula above;
-  ``CHANGELOG`` = ``2 · max(old, new exposure)``; ``GET_IMAGE`` = ``100 ms + 0.11 · max(old, new)``.
+- **Images**: as LabVIEW, ``alox_function_ll_get_image`` Run Once (``ctx.run_once(GET_IMAGE)``, the profile's High
+  Mag parameters with Exposure Mode "Current" during the measures, the profile's mode for the final display) when
+  the Get Image function is registered; else the newest frame of the camera device, stored with
+  :meth:`ImageSink.put`. ``acquire=`` injects another grabber.
+- **Waits** (owner decision B3, monochromator Q5): :class:`WaitRule` ``FRESH_FRAME`` (default) = after each
+  exposure change (the ``Wait`` state, which follows every wavelength change, and "Wait Next Frame") wait
+  ``old + new exposure`` (:func:`fresh_frame_wait_s`) so that the newest frame was exposed entirely after the
+  change; ``AS_DRAWN`` = the Wait-state formula above and ``2·E + 100 ms``; ``CHANGELOG`` = ``2·max(old, new)``;
+  ``GET_IMAGE`` = ``100 ms + 0.11·max(old, new)``. The 250 ms of ``Check Wavelength`` and the 100 ms of
+  ``Set Exposure`` are kept as drawn.
+- Default range start 700 nm (owner decision D4; LabVIEW 750). Only ``goto`` / ``position`` / ``serial`` of the
+  monochromator are used (owner decision B4: Reset, Scan, Calibrate, Select Grating stay maintenance tools).
 - Pixel size: ``hardware.camera.highmag.pixelsize`` / ``units`` (0 pixels, 1 µm, 2 mm: ×1000), as
   ``IMAQ Get Calibration Info`` of the grabbed image (Get Image calibrates it from the same settings).
 - The "Show Window" run panel and the LabVIEW UI events are replaced by ``ctx.set_state`` data
@@ -122,6 +129,7 @@ __all__ = [
     "FunctionFailed",
     "WaitRule",
     "ae_wait_s",
+    "fresh_frame_wait_s",
     "grab_image",
     "is_empty_circle",
     "masked_mean",
@@ -153,6 +161,9 @@ TEXTS = {
     CAMERA_MODULE: "camera/z stage module command timeout",
 }
 
+#: Lowest default wavelength (owner decision D4: the default tables start at 700 nm; LabVIEW's default was 750).
+DEFAULT_START_WL = 700.0
+
 #: Errors the state machines turn into their ``Error`` state.
 LV_ERRORS = (DeviceError, AloxError, ExposureError, LookupError)
 
@@ -161,14 +172,28 @@ LV_ERRORS = (DeviceError, AloxError, ExposureError, LookupError)
 class WaitRule(StrEnum):
     """Wait before using a frame after an exposure or wavelength change (monochromator.md Q5, questions B3)."""
 
-    AS_DRAWN = "as_drawn"       # what the function's own diagrams do (default)
-    CHANGELOG = "changelog"     # 2 × max(old, new exposure) (changelog 1.0.0.11)
-    GET_IMAGE = "get_image"     # 100 ms + 0.11 × max(old, new exposure) (Get Image "Wait for valid frame")
+    FRESH_FRAME = "fresh_frame"  # owner decision B3 (default): :func:`fresh_frame_wait_s`, then the newest frame
+    AS_DRAWN = "as_drawn"        # what the function's own diagrams do
+    CHANGELOG = "changelog"      # 2 × max(old, new exposure) (changelog 1.0.0.11)
+    GET_IMAGE = "get_image"      # 100 ms + 0.11 × max(old, new exposure) (monochromator.md §6.3, Get Image)
+
+
+def fresh_frame_wait_s(old_us: float, new_us: float) -> float:
+    """Owner decision B3 ("wait to get a new image according to the exposure"): after a wavelength or exposure change
+    the image used must be exposed entirely after the change. The frame being exposed at the change ends at most
+    ``old`` µs later and the next one takes ``new`` µs, so after ``old + new`` the newest frame
+    (``Camera.grab(newest=True)``) started after the change. An unknown old exposure counts as the new one. Seconds.
+    Shared helper (the HL mesa function can reuse it)."""
+    new = _finite(new_us)
+    old = float(old_us) if math.isfinite(old_us) else new
+    return (max(old, 0.0) + max(new, 0.0)) / 1e6
 
 
 def settle_s(rule: WaitRule, old_us: float, new_us: float) -> float:
-    """The wait of ``rule`` in seconds for exposures in µs (``AS_DRAWN`` is resolved by the caller: here it means the
-    Get Image rule, which the Search Wavelength diagrams use)."""
+    """The wait of ``rule`` in seconds for exposures in µs (``AS_DRAWN`` is resolved by the caller; here it gives the
+    Get Image formula of monochromator.md §6.3)."""
+    if rule is WaitRule.FRESH_FRAME:
+        return fresh_frame_wait_s(old_us, new_us)
     worst = max(_finite(old_us), _finite(new_us))
     if rule is WaitRule.CHANGELOG:
         return 2.0 * worst / 1e6
@@ -257,6 +282,13 @@ def select_wavelengths(table: Sequence[float], start: float, end: float) -> list
     return wls[min(i, j):max(i, j) + 1]
 
 
+def require_devices(services: Services, *names: str) -> None:
+    """:class:`LookupError` when a device is missing (the registry then leaves the function unregistered)."""
+    for name in names:
+        if name not in services.devices:
+            raise LookupError(f"device {name!r} is not available")
+
+
 def registered(ctx: FunctionContext, name: FunctionName) -> Any:
     """The function ``name`` of the runner, None when it is not registered."""
     try:
@@ -309,7 +341,7 @@ def error_code_source(exc: BaseException) -> tuple[int, str]:
     return cluster.code, cluster.source
 
 
-class _Choice(IntEnum):
+class LabelledEnum(IntEnum):
     """An enum whose wire code is its value and whose LabVIEW item text is :attr:`label`."""
 
     @property
@@ -359,7 +391,7 @@ class Pauser:
             self.services.sleep(seconds)
 
 
-def _now() -> datetime:
+def local_now() -> datetime:
     return datetime.now(UTC).astimezone()
 
 
@@ -369,7 +401,7 @@ def timestamp_name(when: datetime, suffix: str) -> str:
 
 
 # ================================================================================================== enums, params
-class AutoExposureMode(_Choice):
+class AutoExposureMode(LabelledEnum):
     """``alox_typedef_auto_exposure_mode``."""
 
     CURRENT_WAVELENGTH = 0
@@ -476,7 +508,7 @@ class AutoExposureOptions:
     wl_check_period_s: float = 0.250
     wl_check_timeout_s: float = 30.0              # NEW (LabVIEW: no limit)
     set_exposure_pause_s: float = 0.100
-    wait_rule: WaitRule = WaitRule.AS_DRAWN
+    wait_rule: WaitRule = WaitRule.FRESH_FRAME     # owner B3; AS_DRAWN = the Wait-state formula of the diagram
     restore_exposure: bool = True                 # fix: Error / Stopped also restore the initial exposure
     calib_finite_only: bool = True                # fix: "Save calib values" skips NaN ExpoAuto
     newest_frame: bool = True
@@ -499,6 +531,7 @@ class AutoExposure(MeasurementFunction):
         self.services = services
         self.options = options or AutoExposureOptions()
         self._acquire = acquire
+        require_devices(services, self.options.camera, "wl")
 
     def check_params(self, params: AutoExposureParams | None) -> AutoExposureParams:
         p = AutoExposureParams.from_profile(self.services.profile) if params is None else params
@@ -669,7 +702,7 @@ class _AEJob:
     def set_wavelength(self) -> AEState:
         ss = self.session
         if ss.index == 0:
-            start = float(self.s.profile.get("wavelength.start", 750.0))
+            start = float(self.s.profile.get("wavelength.start", DEFAULT_START_WL))
             end = float(self.s.profile.get("wavelength.end", 950.0))
             ss.wavelengths = select_wavelengths(ss.wavelengths, start, end)
             if self.s.log is not None:
@@ -834,11 +867,15 @@ class _AEJob:
         ss.retried.clear()
         nxt = AEState.FINISHED if ss.index >= len(ss.wavelengths) else AEState.SET_WAVELENGTH
         try:
-            self.camera.set_exposure(r.exposure)
+            camera = self.camera
+            old = float(camera.exposure())
+            camera.set_exposure(r.exposure)
         except LV_ERRORS as exc:
             return self.fail(_wrap(exc, CAMERA_MODULE, "Set Auto-Exposure"), AEState.SET_AUTO_EXPO)
-        if not math.isnan(r.exposure):
-            self.pause((r.exposure / 1000.0 * 2.0 + 100.0) / 1000.0)                # "Wait Next Frame"
+        if not math.isnan(r.exposure):                                              # "Wait Next Frame"
+            as_drawn = (r.exposure / 1000.0 * 2.0 + 100.0) / 1000.0
+            self.pause(as_drawn if self.o.wait_rule is WaitRule.AS_DRAWN else settle_s(self.o.wait_rule, old,
+                                                                                       r.exposure))
         # frame 1: update the table; frame 2: "Save calib values"
         data = AutoExposureData(r.exposure, r.exposure1, r.exposure2, r.brightness1, r.brightness2)
         try:
@@ -891,7 +928,7 @@ class _AEJob:
         folders = self.s.folders
         if folders is None or not as_bool(self.s.settings.get("log.saveautoexpoimages", False)):
             return
-        path = Path(folders.image_folder("autoexpo")) / (timestamp_name(_now(), "autoexpo") + ".png")
+        path = Path(folders.image_folder("autoexpo")) / (timestamp_name(local_now(), "autoexpo") + ".png")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             write_png(path, np.asarray(pixels))
@@ -904,7 +941,7 @@ class _AEJob:
         folders = self.s.folders
         if folders is None or not as_bool(self.s.settings.get("log.saveautoexpodata", False)):
             return
-        path = Path(folders.file_folder("autoexpo")) / (timestamp_name(_now(), "autoexpo") + ".ae")
+        path = Path(folders.file_folder("autoexpo")) / (timestamp_name(local_now(), "autoexpo") + ".ae")
         values = [float(v) for v in asdict(self.report).values()]
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
