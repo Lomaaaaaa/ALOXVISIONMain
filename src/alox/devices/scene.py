@@ -158,10 +158,10 @@ class SceneParams:
     reflectance_field: float = 0.15
     reflectance_aperture: float = 0.80
     reflectance_mark: float = 0.95
-    reflectance_chuck: float = 0.18
+    reflectance_chuck: float = 0.45                # polished chuck, brighter than the etched field
     texture_wafer: float = 0.03              # amplitude (std, reflectance) and grain (µm)
     texture_wafer_um: float = 1.5
-    texture_chuck: float = 0.25
+    texture_chuck: float = 0.1
     texture_chuck_um: float = 2.0
     # oxide contrast: R_oxide = R_aperture · (1 − c(λ)), c = min + (max − min)·exp(−((λ − peak)/width)²)
     contrast_peak_nm: float = 850.0
@@ -564,9 +564,9 @@ class Scene:
                aperture_um: float, contrast: float) -> np.ndarray:
         """Reflectance of the wafer surface (field, mesas, marks, texture) blurred by ``sigma`` µm."""
         p = self.params
-        g = math.exp(-0.5 * (sigma / p.texture_wafer_um) ** 2)
-        refl = np.float32(p.reflectance_field) + np.float32(p.texture_wafer * g) * self._texture(
-            x0, y0, du, dv, p.texture_wafer_um, 0)
+        g = math.exp(-0.5 * (sigma / p.texture_wafer_um) ** 2)            # the etched field is rough, mesa tops
+        texture = np.float32(p.texture_wafer * g) * self._texture(x0, y0, du, dv, p.texture_wafer_um, 0)  # smooth
+        refl = np.float32(p.reflectance_field) + texture
         # mesas: nearest grid node of each pixel
         pitch = p.mesa_pitch_um
         rm = p.mesa_diameter_um / 2.0
@@ -580,6 +580,7 @@ class Scene:
             d = np.hypot((tx - nx) * np.float32(pitch), (ty - ny) * np.float32(pitch))
             r_ox = p.reflectance_aperture * (1.0 - contrast)
             mesa = _disc(d, rm, sigma) * np.float32(r_ox - p.reflectance_field)
+            mesa = mesa - texture * _disc(d, rm, sigma)
             if aperture_um > 0:
                 mesa = mesa + _disc(d, aperture_um / 2.0, sigma) * np.float32(p.reflectance_aperture - r_ox)
             # nodes without a mesa (edge exclusion, flat, around the marks): a lookup table over the nodes in view
