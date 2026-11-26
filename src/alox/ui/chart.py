@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from alox.ui import theme
 
-__all__ = ["SERIES_COLOURS", "Chart", "Marker", "Series", "nice_ticks", "series_colour"]
+__all__ = ["SERIES_COLOURS", "Chart", "Marker", "Series", "nice_ticks", "series_colour", "time_ticks"]
 
 #: Categorical series colours (light, dark), in their fixed order.
 SERIES_COLOURS: tuple[tuple[str, str], ...] = (
@@ -44,7 +44,7 @@ def series_colour(index: int, current: theme.Theme | None = None) -> QColor:
 
 
 def nice_ticks(lo: float, hi: float, count: int = 5) -> list[float]:
-    """About ``count`` round tick values (1, 2, 2.5, 5 × 10^n steps) covering [lo, hi]."""
+    """About ``count`` round tick values (the 1, 2, 2.5, 5 × 10^n step giving the nearest count) covering [lo, hi]."""
     if not (math.isfinite(lo) and math.isfinite(hi)):
         return []
     if hi < lo:
@@ -53,14 +53,32 @@ def nice_ticks(lo: float, hi: float, count: int = 5) -> list[float]:
         return [lo]
     raw = (hi - lo) / max(1, count)
     power = 10 ** math.floor(math.log10(raw))
-    step = next(m * power for m in (1, 2, 2.5, 5, 10) if m * power >= raw - 1e-12 * power)
+    span = hi - lo
+    step = min((m * power for m in (10, 5, 2.5, 2, 1)), key=lambda st: abs(span / st - count))   # ties: fewer
+    digits = max(0, 3 - math.floor(math.log10(step)))
     first = math.ceil(lo / step - 1e-9) * step
     ticks = []
     value = first
     while value <= hi + step * 1e-9:
-        ticks.append(0.0 if abs(value) < step * 1e-9 else value)
+        ticks.append(0.0 if abs(value) < step * 1e-9 else round(value, digits))
         value = first + len(ticks) * step
     return ticks
+
+
+#: The steps of a time axis (s).
+TIME_STEPS = (1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400)
+
+
+def time_ticks(lo: float, hi: float, count: int = 5) -> list[float]:
+    """About ``count`` ticks of a time axis (Unix seconds) on round steps (10 s, 1 min, 5 min, 1 h ...)."""
+    if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+        return nice_ticks(lo, hi, count)
+    raw = (hi - lo) / max(1, count)
+    step = next((s for s in TIME_STEPS if s >= raw), None)
+    if step is None:
+        return nice_ticks(lo, hi, count)
+    first = math.ceil(lo / step) * step
+    return [float(first + i * step) for i in range(int((hi - first) // step) + 1)]
 
 
 def _padded(lo: float, hi: float, fraction: float = 0.06) -> tuple[float, float]:
@@ -103,13 +121,16 @@ def _default_format(step: float) -> Callable[[float], str]:
 
 
 class Chart(QWidget):
-    """The chart. ``x_format(value) -> str`` formats the x tick labels (e.g. a time of day)."""
+    """The chart. ``x_format(value) -> str`` formats the x tick labels (e.g. a time of day), ``x_ticks(lo, hi,
+    count)`` places them (:func:`nice_ticks`, :func:`time_ticks`)."""
 
     def __init__(self, x_label: str = "", y_label: str = "", *, x_format: Callable[[float], str] | None = None,
-                 empty_text: str = "No data", parent: QWidget | None = None) -> None:
+                 x_ticks: Callable[[float, float, int], list[float]] | None = None, empty_text: str = "No data",
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.x_label, self.y_label = x_label, y_label
         self.x_format = x_format
+        self.x_ticks = x_ticks or nice_ticks
         self.empty_text = empty_text
         self.series: list[Series] = []
         self.markers: list[Marker] = []
@@ -160,7 +181,7 @@ class Chart(QWidget):
             painter.end()
             return
         (x0, x1), (y0, y1) = ranges
-        xticks = [v for v in nice_ticks(x0, x1, max(2, int(rect.width() // 90))) if x0 <= v <= x1]
+        xticks = [v for v in self.x_ticks(x0, x1, max(2, int(rect.width() // 90))) if x0 <= v <= x1]
         yticks = [v for v in nice_ticks(y0, y1, max(2, int(rect.height() // 40))) if y0 <= v <= y1]
         xstep = xticks[1] - xticks[0] if len(xticks) > 1 else (x1 - x0 or 1.0)
         ystep = yticks[1] - yticks[0] if len(yticks) > 1 else (y1 - y0 or 1.0)

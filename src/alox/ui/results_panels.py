@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from alox.core.functions import FunctionName
 from alox.ui import theme
-from alox.ui.chart import Chart, Marker, Series, series_colour
+from alox.ui.chart import Chart, Marker, Series, series_colour, time_ticks
 from alox.ui.results import (
     DASH,
     HIGH,
@@ -129,9 +129,11 @@ class ProgressLine(QWidget):
 class Fields(QWidget):
     """Captioned read-only values on ``columns`` columns, (re)built when the captions change."""
 
-    def __init__(self, columns: int = 2, parent: QWidget | None = None) -> None:
+    def __init__(self, columns: int = 2, wide: Sequence[str] = ("POSITION (mm)", "MESSAGE", "LOST"),
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.columns = columns
+        self.wide = frozenset(wide)
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setHorizontalSpacing(10)
@@ -147,13 +149,19 @@ class Fields(QWidget):
                 if item.widget() is not None:
                     item.widget().deleteLater()
             self.values.clear()
-            for i, caption in enumerate(captions):
-                row, col = divmod(i, self.columns)
-                self.grid.addWidget(_label(caption, "field"), row * 2, col)
+            row = col = 0
+            for caption in captions:
+                span = 1
+                if caption in self.wide:
+                    row, col, span = row + (col > 0), 0, self.columns
+                self.grid.addWidget(_label(caption, "field"), row * 2, col, 1, span)
                 field = _value_field()
-                self.grid.addWidget(field, row * 2 + 1, col)
+                self.grid.addWidget(field, row * 2 + 1, col, 1, span)
                 self.values[caption] = field
-            self.grid.setRowStretch(2 * ((len(captions) + self.columns - 1) // self.columns), 1)
+                col += span
+                if col >= self.columns:
+                    row, col = row + 1, 0
+            self.grid.setRowStretch(2 * (row + (col > 0)), 1)
             self.captions = captions
         for caption, text in fields:
             field = self.values[caption]
@@ -180,6 +188,7 @@ class Table(QWidget):
             head = _label(name, "field")
             head.setAlignment(Qt.AlignmentFlag.AlignRight if c else Qt.AlignmentFlag.AlignLeft)
             self.grid.addWidget(head, 0, c)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
         self.cells: list[list[QLabel]] = []
         self.empty = _label("No result", "muted")
         self.grid.addWidget(self.empty, 1, 0, 1, len(self.columns) + 1)
@@ -284,7 +293,8 @@ class MesaPanel(ResultsPanel):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.chart = Chart("TIME", "OXIDE DIAMETER (µm)", x_format=fmt_time, empty_text="No measurement yet")
+        self.chart = Chart("TIME", "OXIDE DIAMETER (µm)", x_format=fmt_time, x_ticks=time_ticks,
+                           empty_text="No measurement yet")
         self.body.addWidget(self.chart, 3)
         self.fields = Fields(2)
         self.body.addWidget(self.fields, 2)
@@ -351,8 +361,9 @@ class WaferMap(QWidget):
                                                                                     centre.y() + reach))
         painter.setFont(bold)
         painter.setPen(QColor(t.muted))
-        painter.drawText(QPointF(centre.x() + reach * 0.5 + 6, centre.y() - reach * 0.5 - 4), "A")
-        painter.drawText(QPointF(centre.x() - reach * 0.5 - 14, centre.y() - reach * 0.5 - 4), "B")
+        for name, side in (("A", 1), ("B", -1)):           # beside each axis, near the centre
+            at = QPointF(centre.x() + side * (0.35 * diag + 7), centre.y() - 0.35 * diag + 7)
+            painter.drawText(QRectF(at.x() - 8, at.y() - 8, 16, 16), Qt.AlignmentFlag.AlignCenter, name)
         measured_colour = series_colour(0, t)
         running = QColor(t.running.border)
         values = {row: z for row, _name, z in self.points}
@@ -570,7 +581,10 @@ class _TablePanel(ResultsPanel):
     def __init__(self, columns: Sequence[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.table = Table(columns)
-        self.body.addWidget(self.table, 3)
+        box = QVBoxLayout()
+        box.addWidget(self.table, 0, Qt.AlignmentFlag.AlignLeft)
+        box.addStretch(1)
+        self.body.addLayout(box, 3)
         self.side = QVBoxLayout()
         self.side.setSpacing(6)
         self.body.addLayout(self.side, 2)

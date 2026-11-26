@@ -31,6 +31,7 @@ from alox.functions.bowing import progress as bowing_progress
 from alox.vision.wafer import BOWING_ROWS
 
 __all__ = [
+    "DASH",
     "HIGH",
     "LOW",
     "CircleResults",
@@ -40,6 +41,7 @@ __all__ = [
     "OxydResults",
     "Results",
     "ResultsBook",
+    "TableRow",
     "TiltResults",
     "Validity",
     "WavelengthResults",
@@ -170,10 +172,7 @@ class Results:
         self.take(data)
         if state.lower() in TERMINAL_STATES:
             self.done = True
-            if state.lower() == "error":
-                self.outcome = "failed"
-            elif state.lower() == "stopped":
-                self.outcome = "stopped"
+            self.outcome = {"error": "failed", "stopped": "stopped"}.get(state.lower(), "finished")
 
     def ended(self, kind: str, data: Mapping[str, Any], result: Any = None) -> None:
         self._common(data)
@@ -317,8 +316,8 @@ class MesaResults(Results):
         return [("OXID DIAMETER (µm)", fmt(self.oxyd, 3)), ("MESA DIAMETER (µm)", fmt(self.external, 3)),
                 ("OXID RATE (µm/min)", self.rate_text()), ("REMAINING TIME", self.remaining_text()),
                 ("TARGET (µm)", fmt(self.target, 3) if num(self.target) > 0 else DASH),
-                ("WAVELENGTH (nm)", fmt(self.wavelength, 0)),
-                ("POSITION (mm)", self.position_text()), ("MEASURES", str(len(self.samples)))]
+                ("WAVELENGTH (nm)", fmt(self.wavelength, 0)), ("MEASURES", str(len(self.samples))),
+                ("POSITION (mm)", self.position_text())]
 
 
 class BowingResults(Results):
@@ -395,6 +394,9 @@ class TiltResults(Results):
         self.index: int | None = None
         self.positions = 0
         self.objects: tuple[bool | None, bool | None] = (None, None)
+        self.matches: tuple[Any, Any] = (None, None)
+        self.found_edges = math.nan
+        self.message = ""
         self.lost = ""
 
     def take(self, data: Mapping[str, Any]) -> None:
@@ -442,19 +444,33 @@ class TiltResults(Results):
             self.current_xy = (num(xy[0]), num(xy[1]))
         if get(report, "method") == 1:
             self.objects = (bool(get(report, "object1_found")), bool(get(report, "object2_found")))
+            self.matches = (get(report, "best_match1_mm"), get(report, "best_match2_mm"))
+        edge = get(report, "straight_edge")
+        if edge is not None:
+            self.found_edges = num(get(edge, "found_edges_percent"))
+            self.message = str(get(edge, "message", "") or "")
+        if baseline is not None and get(baseline, "message"):
+            self.message = str(get(baseline, "message"))
 
     def validity(self) -> Validity:
         return Validity.of(self.valid, self.valid is not None or finite(self.angle))
 
     def fields(self) -> list[tuple[str, str]]:
         xy = self.current_xy
-        out = [("TILT ANGLE (°)", fmt(self.angle, 4)), ("METHOD", self.method or DASH),
+        out = [("METHOD", self.method or DASH),
                ("UNCERTAINTY 1σ (°)", fmt(self.uncertainty, 4)),
                ("BASELINE (mm)", fmt(self.baseline_mm, 3)),
                ("IMAGE ANGLE (°)", fmt(self.image_angle, 4)),
                ("POSITION (mm)", DASH if xy is None else f"X {fmt(xy[0], 3)}  Y {fmt(xy[1], 3)}")]
         if self.objects != (None, None):
             out.append(("OBJECTS FOUND", " / ".join("yes" if f else "no" for f in self.objects)))
+        for i, match in enumerate(self.matches, 1):
+            if match is not None:
+                out.append((f"OBJECT {i} (mm)", f"X {fmt(match[0], 3)}  Y {fmt(match[1], 3)}"))
+        if finite(self.found_edges):
+            out.append(("FOUND EDGES (%)", fmt(self.found_edges, 1)))
+        if self.message:
+            out.append(("MESSAGE", self.message))
         if self.lost:
             out.append(("LOST", self.lost))
         return out

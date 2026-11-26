@@ -659,9 +659,6 @@ class MainWindow(QMainWindow):
     def on_event(self, event: Any) -> None:
         """A bus event, in the UI thread."""
         parts = self.controller.handle(event)
-        level = self.results.handle(event)
-        if level is not None:
-            self.show_results(level)
         if "functions" in parts:
             self.refresh_functions()
         if parts & {"system", "alarm", "title", "infos"}:
@@ -679,6 +676,12 @@ class MainWindow(QMainWindow):
                 self.tabs.setCurrentIndex(int(tab))
         if "visible" in parts and self.controller.visible_request is not None:
             self.setVisible(self.controller.visible_request)
+        try:
+            level = self.results.handle(event)
+            if level is not None:
+                self.show_results(level)
+        except Exception:                                   # a bad report must not stop the window
+            log.exception("results panel: %s", event.topic)
 
     def show_results(self, level: str) -> None:
         """The results panel of the running or last function of ``level`` (``alox_manager_hl_results_panels`` /
