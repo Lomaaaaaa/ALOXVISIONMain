@@ -1,0 +1,25 @@
+; alox_setup.ini of ALOX Vision (Python): the folders of the application, read at every start.
+;
+; Installed as alox_setup.ini.example; the installer never writes alox_setup.ini itself. Copy this file to
+; alox_setup.ini in the same folder (C:\Program Files\Aloxtec\AloxVisionPy, administrator rights) and adjust it.
+; Without alox_setup.ini the application uses the LabVIEW defaults D:\alox\settings, D:\alox\02-vision, ...,
+; i.e. the folders of the LabVIEW installation.
+;
+; The values below are separate folders for the Python application (recommended for the side-by-side test sessions):
+; LabVIEW's settings, recipes and data stay untouched. At the first start the application creates them, creates
+; <settings>\alox.ini from alox_default.ini (next to alox.exe) and a DEFAULT recipe in an empty profiles folder.
+; For a test session with the machine's hardware settings, copy the machine's alox.ini from LabVIEW's settings folder
+; into <settings> first (a copy: LabVIEW's file stays as it is), and the recipes to test into <profiles>.
+;
+; To share LabVIEW's folders instead, copy LabVIEW's own alox_setup.ini here (same keys). The Python application
+; then writes into LabVIEW's folders (alox.ini when settings are saved, recipes, data, logs).
+;
+; Only one of LabVIEW and the Python application may run at a time (the stages, cameras and ports are exclusive).
+
+[folders]
+settings = "D:\alox-py\settings"
+vision = "D:\alox-py\02-vision"
+data = "D:\alox-py\02-vision\data"
+profiles = "D:\alox-py\02-vision\profiles"
+exposures = "D:\alox-py\02-vision\exposures"
+jobhistory = "D:\alox-py\04-JobHistory"
