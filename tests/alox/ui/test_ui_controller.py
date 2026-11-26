@@ -217,6 +217,9 @@ def test_moves_wavelength_joysticks_and_refresh(core: Core, devices: dict[str, A
     first, second = c.poll(), c.poll()
     assert (first.xy_joystick, first.z_joystick, first.wavelength_nm, first.joystick_ok) == (True, False, 912, True)
     assert first.period_ms == 0.0 and second.period_ms == pytest.approx(250.0)
+    assert c.move("xy", 3.0, 4.0).ok                                  # MOVE XY (owner's request): one move
+    assert devices["xy"].moves[-1] == {"args": (), "x": 7.0, "y": 16.0, "wait": False,
+                                       "timeout": c.DEVICE_TIMEOUT_S}
     devices["xy"].state = "fault"
     assert not c.move("x", 0.0, 0.0).ok and c.poll().xy_joystick is None
 

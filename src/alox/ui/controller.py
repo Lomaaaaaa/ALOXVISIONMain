@@ -663,24 +663,29 @@ class Controller:
 
     def move(self, axis: str, x: float, y: float) -> ActionResult:
         """MOVE X / MOVE Y (``alox_core_ui d414``): (X_CTRL, Y_CTRL) converted Wafer → Stages, then "Move Absolute"
-        of the one axis; log "Move clicked: travel X (mm): %f". The move is not waited for."""
-        if axis not in ("x", "y"):
+        of the one axis; log "Move clicked: travel X (mm): %f". The move is not waited for.
+
+        ``axis="xy"``: MOVE XY (owner's request, not in LabVIEW): both axes in one move, so a destination inside the
+        move radius can be reached from a position outside it (one-axis moves from there are refused with 9404)."""
+        if axis not in ("x", "y", "xy"):
             raise ValueError(f"axis {axis!r}")
         xy = self._ready("xy")
         if xy is None:
             return ActionResult(False, "XY stages not ready")
         origin, system = self._wafer_frame()
         sx, sy = wafer_to_stage(float(x), float(y), origin, system)
-        target = sx if axis == "x" else sy
         try:
             if axis == "x":
                 xy.move_absolute(x=sx, wait=False, timeout=self.DEVICE_TIMEOUT_S)
-            else:
+            elif axis == "y":
                 xy.move_absolute(y=sy, wait=False, timeout=self.DEVICE_TIMEOUT_S)
+            else:
+                xy.move_absolute(x=sx, y=sy, wait=False, timeout=self.DEVICE_TIMEOUT_S)
         except DeviceError as exc:
             self.core.log.error(f"Move {axis.upper()}: {exc}")
             return ActionResult(False, str(exc))
-        self.core.log.info(f"Move clicked: travel {axis.upper()} (mm): {target:f}")
+        travel = {"x": f"{sx:f}", "y": f"{sy:f}", "xy": f"{sx:f}, {sy:f}"}[axis]
+        self.core.log.info(f"Move clicked: travel {axis.upper()} (mm): {travel}")
         return ActionResult(True)
 
     def set_wavelength(self, nm: float) -> ActionResult:
