@@ -115,6 +115,32 @@ def test_fields_are_consistent(spec: PanelSpec):
             assert codes == list(range(len(codes))) and len(codes) >= 2, f.key
 
 
+def test_measure_type_ring_has_every_oxide_measure_type():
+    """Owner S2 / S3: the DIAM. TYPE ring of Measure Oxyd (used by the Mesa job too) offers DEPTH, HEIGHT Y and
+    WIDTH X after LabVIEW's six types, with the codes of OxideMeasureType; each one is read back as that type."""
+    from alox.functions.measure_oxyd import MeasureOxydParams
+    from alox.vision.stats import OxideMeasureType
+
+    spec = PANELS["MES_VCSEL"]
+    ring = next(f for f in spec.fields() if f.key == "measure.oxyd.measuretype")
+    assert [(code, text.replace(" ", "_")) for code, text in ring.items] == [(t.value, t.name) for t in
+                                                                           OxideMeasureType]
+    for code, _text in ring.items:
+        params = MeasureOxydParams.from_profile(FakeProfile({"measure.oxyd.measuretype": code}))
+        assert params.oxyd_measure_type is OxideMeasureType(code)
+
+
+def test_tilt_panel_edits_the_grid_row_angle():
+    """Owner S6: the Lattice method's Grid Row Angle (the grid at any angle to the flat) is in the LONG BASELINE tab."""
+    from alox.functions.tilt import TiltParams
+
+    spec = PANELS["MES_TILT"]
+    page = next(page for page in spec.pages if page.title == "LONG BASELINE")
+    assert "measure.tilt.latticeangledeg" in [f.key for group in page.groups for f in group.fields]
+    params = TiltParams.from_profile(FakeProfile({"measure.tilt.latticeangledeg": 30.0}))
+    assert params.long_baseline.lattice_angle_deg == 30.0
+
+
 def _limits(spec: PanelSpec) -> Iterator[tuple[Field, Any]]:
     for f in spec.fields():
         if f.kind is Kind.NUMBER:

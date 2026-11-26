@@ -429,8 +429,10 @@ MEASURE_OXYD = PanelSpec(
                 num("MAX OXID Diam.", _MO + "oxydmax", 50.0, 0.0, 10_000.0, unit="µm"),
                 num("Result OFFSET", _MO + "resultoffset", 0.0, -1_000.0, 1_000.0, unit="µm", step=0.1))))),
         Page("FILTERING OXID", (Group("FILTERING", (
+            # LabVIEW's six types, then the Python-only DEPTH (Line mesas), HEIGHT Y and WIDTH X (Rectangle mesas;
+            # owner S2 / S3, alox.vision.stats.OxideMeasureType); the Mesa job measures with this type too
             ring("DIAM. TYPE", _MO + "measuretype", 0, "MEAN", "MEDIAN", "FIT", "SURFACE", "CIRCUMSCRIBED",
-                 "INSCRIBED"),
+                 "INSCRIBED", "DEPTH", "HEIGHT Y", "WIDTH X"),
             num("OXYD TARGET", _MO + "oxydtarget", 25.0, 0.0, 10_000.0, unit="µm"),
             num("FIT MAX DIST", _MO + "fitmaxdistance", 3, 0, 1_000, unit="px"),
             num("FIT MIN SCORE", _MO + "fitminscore", 500.0, 0.0, 100_000.0, step=10.0),
@@ -664,6 +666,8 @@ TILT = PanelSpec(
             num("CONSISTENCY", _MT + "lbtolerancedeg", 0.5, 0.01, 45.0, unit="±°", step=0.1, decimals=2),
             num("MESA PITCH (0 = MEASURED)", _MT + "latticepitchum", 0.0, 0.0, 10_000.0, unit="µm", step=1.0,
                 decimals=2),
+            # the angle of the grid's densest row against the wafer X axis by design (owner S6: any orientation)
+            num("GRID ROW ANGLE", _MT + "latticeangledeg", 0.0, -180.0, 180.0, unit="°", step=0.5, decimals=3),
             check("REFOCUS AT EACH POSITION", _MT + "lbrefocus", False))),)),
         Page("DISPLAY", (Group("DISPLAY", (
             check("SHOW WINDOW", _MT + "showwindow", True),

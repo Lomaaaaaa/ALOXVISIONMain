@@ -117,9 +117,15 @@ def mesa_event(job: JobInfo | None, *, unix_time: float, external_fitted: float,
                measure_type: str, stddev: float, rate: float, remaining: str, position: Sequence[float],
                wavelength: float) -> Event:
     """``measure_mesa``. ``oxyd`` keys: ``Fitted``, ``Median``, ``Average``, ``Surface``, ``Inscribed``,
-    ``Circumscribed``, ``Circularity`` (µm, circularity unitless); ``remaining`` is ``"HH:MM:SS"``."""
+    ``Circumscribed``, ``Circularity`` (µm, circularity unitless), then the Python-only ``Depth`` (Line mesas: the
+    oxidised depth per side), ``Height_Y`` and ``Width_X`` (Rectangle mesas: the aperture's sides along the image Y
+    and X axes; owner S2 / S3), sent only when measured (missing or NaN: not sent, so that a circular mesa's payload
+    stays LabVIEW's); ``measure_type`` is ``Type_Measure_Rate`` (e.g. ``"fitted"``, ``"Depth"``); ``remaining`` is
+    ``"HH:MM:SS"``."""
     keys = ("Fitted", "Median", "Average", "Surface", "Inscribed", "Circumscribed", "Circularity")
     oxyd_out: dict[str, str] = {k: _f(oxyd[k]) for k in keys}
+    oxyd_out.update({k: _f(oxyd[k]) for k in ("Depth", "Height_Y", "Width_X")
+                     if k in oxyd and not math.isnan(float(oxyd[k]))})
     oxyd_out.update({"Type_Measure_Rate": measure_type, "STDDEV FET/#": _f(stddev), "Unit": "um"})
     x, y, z = position
     return _event("measure_mesa", {

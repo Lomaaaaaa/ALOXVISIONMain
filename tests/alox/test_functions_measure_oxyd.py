@@ -201,8 +201,9 @@ def test_detect_circle_then_measure_oxyd_data_flow(rig):
 
 
 def test_diameters_report_scaling():
-    d = DiametersReport(1, 2, 3, 4, 5, 6, 7, 1.5, 0.2, 3.0).scaled(2.0)
-    assert d == DiametersReport(2, 4, 6, 8, 10, 12, 14, 1.5, 0.2, 3.0)
+    d = DiametersReport(1, 2, 3, 4, 5, 6, 7, 1.5, 0.2, 3.0, 8, 9, 10).scaled(2.0)
+    assert d == DiametersReport(2, 4, 6, 8, 10, 12, 14, 1.5, 0.2, 3.0, 16, 18, 20)
+    assert [d.selected(t) for t in OxideMeasureType] == [8, 6, 4, 10, 14, 12, 16, 18, 20]
 
 
 # ================================================================================================== Line, Rectangle
@@ -233,15 +234,16 @@ def test_line_measures_the_stripe_and_the_oxidised_borders(rig, tilt, vertical):
     d = r.diameters
     assert d.external == pytest.approx(100.0, abs=0.6)                  # the mesa width
     assert d.fit == d.inscribed == pytest.approx(60.0, abs=0.6)         # the non-oxidised width
-    assert d.median == pytest.approx((d.external - d.fit) / 2.0)        # the oxidised depth per side: 20 px
+    assert d.depth == pytest.approx((d.external - d.fit) / 2.0)         # the oxidised depth per side: 20 px
     assert d.mean == pytest.approx(60.0, abs=0.6) and d.stddev < 1.0
-    for name in ("surface", "circumscribed", "circ_insc_ratio", "accuracy"):
+    for name in ("median", "surface", "circumscribed", "circ_insc_ratio", "accuracy", "height_y", "width_x"):
         assert math.isnan(getattr(d, name)), name
     assert len(r.diameter_lines) == len(r.diameter_lengths) == len(r.oxyd_points) // 2 > 10
     assert len(r.mesa_lines) == len(r.mesa_points) // 2 > 10 and r.mesa_search_lines and r.gradient_values
     assert r.fit_score == 1000.0
     um = r.diameters_um
-    assert (um.external, um.fit, um.median) == pytest.approx((50.0, 30.0, 10.0), abs=0.3)
+    assert (um.external, um.fit, um.depth) == pytest.approx((50.0, 30.0, 10.0), abs=0.3)
+    assert um.selected(OxideMeasureType.DEPTH) == um.depth and math.isnan(um.selected(OxideMeasureType.MEDIAN))
     assert r.external_circle.radius == pytest.approx(50.0, abs=0.6)
     for x1, y1, x2, y2 in r.diameter_lines:                             # the oxide segments cross the stripe
         assert math.hypot(x2 - x1, y2 - y1) == pytest.approx(60.0, abs=1.0)
@@ -253,10 +255,17 @@ def test_line_overlays_offset_and_errors(rig):
     base = rig.run(image=stripe_image(), **LINE).diameters
     assert (r.diameters.fit, r.diameters.mean, r.diameters.inscribed) == pytest.approx(
         (base.fit + 2.0, base.mean + 2.0, base.inscribed + 2.0))
-    assert r.diameters.median == pytest.approx(base.median - 1.0) and r.diameters.external == base.external
+    assert r.diameters.depth == pytest.approx(base.depth - 1.0) and r.diameters.external == base.external
     overlays = rig.services.images.overlays
     assert len(overlays["oxyd"]) == 3 and len(overlays["target"]) == 2      # two borders + text; two target lines
     assert [type(shape).__name__ for shape in overlays["mesa"][:2]] == ["Line", "Line"]
+    # measure type DEPTH (owner S3): the text names the depth; the target (5 µm = 10 px) is a depth per side, drawn
+    # inside each border of the 100 px stripe: two lines 2 × (50 − 10) px apart
+    depth = rig.run(image=stripe_image(tilt=0.0), oxyd_measure_type="Depth", target_diam_um=5.0, **LINE)
+    texts = [shape.text for shape in overlays["oxyd"] if type(shape).__name__ == "Text"]
+    assert texts == [f"Oxyd Depth: {depth.diameters_um.depth:.2f} µm"]
+    first, second = overlays["target"]
+    assert abs((first.x1 + first.x2) / 2.0 - (second.x1 + second.x2) / 2.0) == pytest.approx(80.0, abs=1.0)
     with pytest.raises(FunctionError) as info:                         # fully oxidised: no aperture borders
         rig.run(image=stripe_image(aperture=None), **LINE)
     assert info.value.code == 9021 and info.value.report.mesa_found and not info.value.report.oxyd_found
@@ -283,7 +292,7 @@ RECTANGLE = {"mesa_shape_type": "Rectangle", "mesa_min_diam_um": 40.0, "mesa_max
              "oxyd_max_diam_um": 70.0, "circle": Circle(CX - 3.0, CY + 2.5, 40.0)}
 
 
-@pytest.mark.parametrize("angle", [0.0, 10.0, -25.0])
+@pytest.mark.parametrize("angle", [0.0, 10.0, -25.0, 80.0])
 def test_rectangle_measures_the_mesa_and_the_aperture(rig, angle):
     r = rig.run(image=rectangle_image(angle=angle), **RECTANGLE)
     assert r.mesa_found and r.oxyd_found and r.shape_type is MesaShapeType.RECTANGLE
@@ -295,11 +304,16 @@ def test_rectangle_measures_the_mesa_and_the_aperture(rig, angle):
     assert d.external == m.equivalent_diameter and d.fit == o.equivalent_diameter
     assert d.external == pytest.approx(2 * math.sqrt(140 * 100 / math.pi), rel=0.01)       # 133.5 px
     assert d.fit == pytest.approx(2 * math.sqrt(100 * 60 / math.pi), rel=0.01)              # 87.4 px
-    assert d.surface == pytest.approx(o.height) and 60.0 < d.median < 117.0
+    assert d.surface == pytest.approx(d.fit) and 60.0 < d.median < 117.0   # S2: the surface-equivalent diameter
+    # S2: the aperture's side closest to the image Y axis is the height (100 px when the rectangle stands upright)
+    expected = (100.0, 60.0) if 45.0 < angle % 180.0 < 135.0 else (60.0, 100.0)
+    assert (d.height_y, d.width_x) == pytest.approx(expected, abs=1.5) and math.isnan(d.depth)
     for name in ("mean", "inscribed", "circumscribed", "circ_insc_ratio", "stddev", "accuracy"):
         assert math.isnan(getattr(d, name)), name                     # LabVIEW: the constant 0
     assert o.inscribed_diameter < d.fit < o.circumscribed_diameter
-    assert r.diameters_um.surface == pytest.approx(30.0, abs=0.75)
+    assert r.diameters_um.surface == pytest.approx(math.sqrt(100 * 60 / math.pi), rel=0.01)   # 43.7 µm
+    assert (r.diameters_um.height_y, r.diameters_um.width_x) == pytest.approx((expected[0] / 2, expected[1] / 2),
+                                                                              abs=0.75)
     overlays = rig.services.images.overlays
     assert [type(shape).__name__ for shape in overlays["oxyd"]] == ["Line"] * 4 + ["Text"]
 

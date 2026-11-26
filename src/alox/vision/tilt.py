@@ -72,10 +72,13 @@ unseen (the mesa job moves the **stage**, so the angle it needs is against the s
   the image centre** with its 1σ.
 - :func:`detect_mesas`: Otsu threshold, particles (border, size outliers dropped), grey-weighted centroids over the
   particle grown by 2 px (no threshold bias); nothing without a pattern (contrast < 6 × :func:`noise_sigma`).
-  :func:`fit_lattice`: the dominant direction of the nearest-neighbour vectors (mean of 4φ: folded to (−45°, 45°]),
-  the pitches along and across, integer indices, least-squares lattice (origin, row and column vectors) with
-  re-indexing and outlier rejection; rectangular or oblique grids (a hexagonal grid is not handled: its rows are
-  60° apart).
+  :func:`fit_lattice` (owner S6: "can be everything", any lattice type at any angle to the flat): the two shortest
+  independent vectors that occur often between neighbouring centres, integer indices, least-squares lattice
+  (origin and two vectors) with re-indexing and outlier rejection, then the reduced basis (:func:`reduce_basis`: the
+  two shortest independent lattice vectors), the lattice type and its rotational symmetry (:func:`lattice_kind`:
+  hexagonal 60°, square 90°, rectangular / centred rectangular / oblique 180°); the **row** is a shortest lattice
+  vector (the densest row of mesas; among equally short ones the nearest a hint direction), its angle folded to that
+  symmetry. Nothing assumes the rows to be along the image or stage axes, or the grid to be rectangular.
 - :func:`fit_baseline`: the line through the feature's points measured at stage positions far apart (wafer mm),
   ``atan2(Δy, Δx)`` and its 1σ (points' 1σ across the line — detection and stage repeatability — over their spread
   along it, or the residuals when larger); :func:`baseline_target`, :func:`next_baseline_step`,
@@ -118,6 +121,7 @@ from .geometry import GeometryError, Line, fit_line_ransac, fit_line_tls
 from .wafer import straight_edge_tilt
 
 __all__ = [
+    "LATTICE_PERIODS",
     "BaselineFit",
     "EdgeLineFit",
     "EdgeMethod",
@@ -136,12 +140,14 @@ __all__ = [
     "fit_edge_line",
     "fit_lattice",
     "fold_angle",
+    "lattice_kind",
     "mask_matched_object",
     "measure_tilt_straight_edge",
     "next_baseline_step",
     "noise_sigma",
     "pick_row_mesa",
     "rake_lines",
+    "reduce_basis",
 ]
 
 SearchLine = tuple[tuple[float, float], tuple[float, float]]
@@ -713,18 +719,27 @@ def noise_sigma(image: np.ndarray) -> float:
 
 def detect_mesas(image: np.ndarray, *, bright: bool | None = None, min_area_px: float = 6.0,
                  smoothing_px: float = 1.0, min_snr: float = 6.0) -> np.ndarray:
-    """Centres (N×2, pixels) of the mesas (discs or any compact pads) of a grid: Otsu threshold of the lightly
-    smoothed image, the minority phase as objects (``bright`` None) or the bright / dark one; nothing when the two
-    phases differ by less than ``min_snr`` × :func:`noise_sigma` (no pattern); 8-connected particles, those touching
-    the border and those whose area is outside [½, 2] × the median (merged, cut) dropped; each centre is the
-    grey-weighted centroid (weights ``(I − background) / (object − background)`` clipped to [0, 1]) over the particle
-    grown by 2 pixels, unbiased by the threshold for a symmetric object."""
+    """Centres (N×2, pixels) of the mesas (discs or any compact pads) of a grid of any type: Otsu threshold of the
+    lightly smoothed image, the bright or the dark phase as objects (``bright`` None: the phase that gives the more
+    mesas, so that a dense grid — a hexagonal one covers up to 91 % of the surface — is found whichever phase is the
+    larger; the minority phase on a tie); nothing when the two phases differ by less than ``min_snr`` ×
+    :func:`noise_sigma` (no pattern); 8-connected particles, those touching the border and those whose area is outside
+    [½, 2] × the median (merged, cut) dropped; each centre is the grey-weighted centroid (weights ``(I − background) /
+    (object − background)`` clipped to [0, 1]) over the particle grown by 2 pixels, unbiased by the threshold for a
+    symmetric object."""
     grey = _grey(image)
     smooth = ndimage.gaussian_filter(grey, smoothing_px) if smoothing_px > 0 else grey
     high = smooth > _otsu(smooth)
-    if bright is None:
-        bright = bool(high.mean() <= 0.5)
-    mask = high if bright else ~high
+    if bright is not None:
+        return _phase_centres(grey, high if bright else ~high, min_area_px, min_snr)
+    minority = bool(high.mean() <= 0.5)
+    first = _phase_centres(grey, high if minority else ~high, min_area_px, min_snr)
+    second = _phase_centres(grey, ~high if minority else high, min_area_px, min_snr)
+    return second if len(second) > len(first) else first
+
+
+def _phase_centres(grey: np.ndarray, mask: np.ndarray, min_area_px: float, min_snr: float) -> np.ndarray:
+    """The particle centres of one phase of :func:`detect_mesas`."""
     if not mask.any() or mask.all():
         return np.empty((0, 2))
     labels, count = ndimage.label(mask, structure=np.ones((3, 3)))
@@ -746,12 +761,24 @@ def detect_mesas(image: np.ndarray, *, bright: bool | None = None, min_area_px: 
     return centres[:, ::-1].copy()                                # (row, col) → (x, y)
 
 
+#: Tolerances of the lattice classification (:func:`fit_lattice`): relative length difference and angle (°).
+LATTICE_LENGTH_TOLERANCE = 0.03
+LATTICE_ANGLE_TOLERANCE_DEG = 2.0
+#: Rotational symmetry (°) of each lattice kind: a row direction is defined modulo this period.
+LATTICE_PERIODS = {"hexagonal": 60.0, "square": 90.0, "rectangular": 180.0, "centred rectangular": 180.0,
+                   "oblique": 180.0}
+
+
 @dataclass(frozen=True)
 class LatticeFit:
-    """A rectangular lattice fitted on mesa centres (:func:`fit_lattice`), pixels: ``node(i, j) = origin + i·row +
-    j·column``; ``row`` is the lattice vector within ±45° of the image X axis as displayed, ``angle_deg`` its
-    direction in (−45°, 45°] and ``angle_sigma_deg`` the 1σ from the least-squares covariance; ``rms_px`` the 1σ of a
-    centre per axis (residuals); ``centres`` / ``indices`` the centres used and their ``(i, j)``."""
+    """A 2-D lattice of any type and orientation fitted on mesa centres (:func:`fit_lattice`), pixels:
+    ``node(i, j) = origin + i·row + j·column``. ``row`` is a shortest lattice vector (the densest row of mesas; among
+    the equally short ones, the nearest the hint direction), ``column`` the second vector of the reduced basis;
+    ``kind`` the lattice type (``hexagonal``, ``square``, ``rectangular``, ``centred rectangular`` or ``oblique``) and
+    ``period_deg`` its rotational symmetry (60°, 90°, else 180°: the row direction is defined modulo it);
+    ``angle_deg`` the row direction as displayed, folded to ``hint ± period/2``; ``angle_sigma_deg`` its 1σ from the
+    least-squares covariance; ``rms_px`` the 1σ of a centre per axis (residuals); ``centres`` / ``indices`` the
+    centres used and their ``(i, j)``."""
 
     origin: Point
     row: Point
@@ -761,6 +788,8 @@ class LatticeFit:
     rms_px: float
     centres: np.ndarray
     indices: np.ndarray
+    kind: str = "oblique"
+    period_deg: float = 180.0
 
     @property
     def pitch_row_px(self) -> float:
@@ -776,50 +805,116 @@ class LatticeFit:
                 self.origin[1] + i * self.row[1] + j * self.column[1])
 
 
-def _min_component(values: np.ndarray, mask: np.ndarray) -> float:
-    """Median over the points of the smallest ``values`` among their neighbours in ``mask``."""
-    per_point = np.where(mask, values, np.inf).min(axis=1)
-    per_point = per_point[np.isfinite(per_point)]
-    return float(np.median(per_point)) if per_point.size else math.nan
+def reduce_basis(a: Sequence[float], b: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
+    """Lagrange–Gauss reduction of the lattice basis ``(a, b)``: the two shortest independent lattice vectors
+    ``(r1, r2)``, ``|r1| ≤ |r2|`` and ``|r1·r2| ≤ |r1|²/2`` (their angle in [60°, 120°]), as the columns of the first
+    array, and the unimodular integer matrix ``M`` with ``[r1 r2] = [a b] @ M``."""
+    basis = np.column_stack((np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)))
+    m = np.eye(2)
+    if abs(float(np.linalg.det(basis))) < 1e-12:
+        raise ValueError("the lattice vectors are collinear")
+    for _ in range(200):
+        if basis[:, 1] @ basis[:, 1] < basis[:, 0] @ basis[:, 0]:
+            basis, m = basis[:, ::-1].copy(), m[:, ::-1].copy()
+        k = round(float(basis[:, 0] @ basis[:, 1]) / float(basis[:, 0] @ basis[:, 0]))
+        if k == 0:
+            break
+        basis[:, 1] -= k * basis[:, 0]
+        m[:, 1] -= k * m[:, 0]
+    return basis, m
+
+
+def lattice_kind(r1: Sequence[float], r2: Sequence[float], *, length_tol: float = LATTICE_LENGTH_TOLERANCE,
+                 angle_tol_deg: float = LATTICE_ANGLE_TOLERANCE_DEG) -> str:
+    """The type of the lattice of the reduced basis ``(r1, r2)`` (:func:`reduce_basis`): ``hexagonal`` (equal
+    lengths, 60°/120°), ``square``, ``rectangular`` (90°), ``centred rectangular`` (equal lengths, or ``r2``
+    projecting on half of ``r1``: a staggered grid) or ``oblique``, within ``length_tol`` (relative) and
+    ``angle_tol_deg``."""
+    u, v = np.asarray(r1, dtype=np.float64), np.asarray(r2, dtype=np.float64)
+    lu, lv = math.hypot(*u), math.hypot(*v)
+    angle = math.degrees(math.acos(max(-1.0, min(1.0, float(u @ v) / (lu * lv)))))
+    equal = abs(lv - lu) <= length_tol * lu
+    if equal and min(abs(angle - 60.0), abs(angle - 120.0)) <= angle_tol_deg:
+        return "hexagonal"
+    if abs(angle - 90.0) <= angle_tol_deg:
+        return "square" if equal else "rectangular"
+    half = abs(float(u @ v)) / lu                                  # r2's projection on r1
+    if equal or abs(half - lu / 2.0) <= length_tol * lu:
+        return "centred rectangular"
+    return "oblique"
+
+
+def _coarse_basis(pts: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+    """The two shortest independent vectors that occur often between neighbouring centres (each within 15 % of the
+    nearest-neighbour distance of at least 30 % as many neighbour pairs as the most frequent one), averaged over
+    their occurrences; None without two independent ones."""
+    from scipy.spatial import cKDTree
+
+    n = pts.shape[0]
+    dist, nn = cKDTree(pts).query(pts, k=min(25, n))
+    vec = (pts[nn[:, 1:]] - pts[:, None, :]).reshape(-1, 2)
+    dist = dist[:, 1:].ravel()
+    dmin = float(np.median(dist.reshape(n, -1)[:, 0]))
+    if not dmin > 0:
+        return None
+    cand = vec[np.isfinite(dist) & (dist >= 0.5 * dmin) & (dist < 4.5 * dmin)]
+    if cand.shape[0] < 2:
+        return None
+    tol = 0.15 * dmin
+    both = np.vstack((cand, -cand))
+    support = np.asarray(cKDTree(both).query_ball_point(cand, tol, return_length=True))
+    frequent = cand[support >= 0.3 * support.max()]
+    lengths = np.hypot(*frequent.T)
+
+    def mean_of(c: np.ndarray) -> np.ndarray:
+        near = both[np.hypot(*(both - c).T) < tol]
+        return near.mean(axis=0)
+    first = frequent[int(np.argmin(lengths))]
+    b1 = mean_of(first)
+    if not math.hypot(*b1) > 0.0:
+        return None
+    cross = np.abs(frequent[:, 0] * b1[1] - frequent[:, 1] * b1[0]) / (lengths * math.hypot(*b1))
+    other = cross > math.sin(math.radians(10.0))
+    if not other.any():
+        return None
+    b2 = mean_of(frequent[other][int(np.argmin(lengths[other]))])
+    return b1, b2
+
+
+def _angle_gap(a_deg: float, b_deg: float) -> float:
+    return abs(fold_angle(a_deg - b_deg, 360.0))
 
 
 def fit_lattice(centres: np.ndarray, *, reference: Sequence[float] | None = None, min_nodes: int = 6,
                 min_fraction: float = 0.6, angle_hint_deg: float | None = None) -> LatticeFit | None:
-    """A rectangular (or oblique) lattice through the ``centres``: the coarse direction from the nearest-neighbour
-    vectors (mean of 4φ, so folded modulo 90°; or ``angle_hint_deg``), the pitches along and across it, integer
-    indices from the centre nearest ``reference`` (default the centroid), then a least-squares fit of ``origin``,
-    ``row``, ``column`` with re-indexing and rejection of centres farther than ¼ pitch from their node (3 passes).
-    None with fewer than ``min_nodes`` centres on the lattice, fewer than ``min_fraction`` of the centres on it, or
-    fewer than two rows and two columns."""
-    from scipy.spatial import cKDTree
+    """A lattice of any type (square, rectangular, hexagonal, centred rectangular, oblique) and any orientation
+    through the ``centres``:
 
+    1. the coarse basis: the two shortest independent vectors that occur often between neighbouring centres
+       (:func:`_coarse_basis`), no assumption on their directions;
+    2. integer indices from the centre nearest ``reference`` (default the centroid), then a least-squares fit of
+       ``origin`` and the two lattice vectors with re-indexing and rejection of centres farther than ¼ of the
+       shorter vector from their node (3 passes);
+    3. the reduced basis of the fitted vectors (:func:`reduce_basis`: the two shortest independent lattice vectors),
+       the lattice type and its rotational symmetry (:func:`lattice_kind`, :data:`LATTICE_PERIODS`);
+    4. the row: among the shortest lattice vectors (equal within :data:`LATTICE_LENGTH_TOLERANCE`: 6 for a hexagonal
+       lattice, 4 for a square one, ± the shortest otherwise), the one whose direction as displayed is nearest
+       ``angle_hint_deg`` (default 0°, the image X axis); ``angle_deg`` its direction folded to ``hint ± period/2``;
+       the indices are re-expressed on ``(row, column)`` and the vectors refitted (the 1σ of the angle).
+
+    None with fewer than ``min_nodes`` centres on the lattice, fewer than ``min_fraction`` of the centres on it, or
+    fewer than two distinct indices along each vector."""
     pts = np.asarray(centres, dtype=np.float64).reshape(-1, 2)
     n = pts.shape[0]
     if n < max(4, int(min_nodes)):
         return None
-    k = min(13, n)
-    dist, nn = cKDTree(pts).query(pts, k=k)
-    vec = pts[nn[:, 1:]] - pts[:, None, :]
-    dist = dist[:, 1:]
-    dmin = float(np.median(dist[:, 0]))
-    if not dmin > 0:
+    coarse = _coarse_basis(pts)
+    if coarse is None:
         return None
-    if angle_hint_deg is None:
-        near = vec[dist < 1.25 * dmin]
-        phi = np.arctan2(-near[:, 1], near[:, 0])
-        theta = math.atan2(float(np.sin(4 * phi).sum()), float(np.cos(4 * phi).sum())) / 4.0
-    else:
-        theta = math.radians(float(angle_hint_deg))
-    u = np.array([math.cos(theta), -math.sin(theta)])            # displayed angle θ, pixel coordinates
-    v = np.array([math.sin(theta), math.cos(theta)])              # θ − 90° as displayed (down for θ = 0)
-    pu, pv = np.abs(vec @ u), np.abs(vec @ v)
-    pitch_u = _min_component(pu, (pv < 0.35 * pu) & (dist < 4.0 * dmin))      # pitches up to 4:1
-    pitch_v = _min_component(pv, (pu < 0.35 * pv) & (dist < 4.0 * dmin))
-    if not (pitch_u > 0 and pitch_v > 0):
-        return None
+    basis0 = np.column_stack(coarse)
     ref = np.asarray(reference if reference is not None else pts.mean(axis=0), dtype=np.float64)
     base = pts[int(np.argmin(np.hypot(*(pts - ref).T)))]
-    ij = np.column_stack((np.rint((pts - base) @ u / pitch_u), np.rint((pts - base) @ v / pitch_v)))
+    ij = np.rint(np.linalg.solve(basis0, (pts - base).T).T)
     keep = np.ones(n, dtype=bool)
     coef = np.zeros((3, 2))
     for _ in range(3):
@@ -842,22 +937,37 @@ def fit_lattice(centres: np.ndarray, *, reference: Sequence[float] | None = None
     if (keep.sum() < max(4, int(min_nodes), float(min_fraction) * n) or np.unique(ij[keep, 0]).size < 2
             or np.unique(ij[keep, 1]).size < 2):
         return None
+    # the reduced basis, the type, the row nearest the hint
+    reduced, m = reduce_basis(coef[1], coef[2])
+    r1, r2 = reduced[:, 0], reduced[:, 1]
+    kind = lattice_kind(r1, r2)
+    period = LATTICE_PERIODS[kind]
+    hint = 0.0 if angle_hint_deg is None else float(angle_hint_deg)
+    shortest = math.hypot(*r1)
+    choices = []                                                   # (vector, its integer coordinates on (r1, r2))
+    for c in ((1, 0), (0, 1), (1, 1), (1, -1)):
+        for sign in (1, -1):
+            k = np.array(c, dtype=np.float64) * sign
+            vec = reduced @ k
+            if math.hypot(*vec) <= (1.0 + LATTICE_LENGTH_TOLERANCE) * shortest:
+                choices.append((vec, k))
+    _, k_row = min(choices, key=lambda ch: _angle_gap(_displayed_deg(*ch[0]), hint))
+    # the column: the other reduced vector (r2, or r1 when the row is r2), so that (row, column) is a basis
+    k_col = np.array([0.0, 1.0]) if k_row[1] == 0 else np.array([1.0, 0.0])
+    t = m @ np.column_stack((k_row, k_col))                        # (row, column) on the fitted (a, b)
+    ij = np.rint(np.linalg.solve(t, ij.T).T)
     x = np.column_stack((np.ones(n), ij))[keep]
     coef, *_ = np.linalg.lstsq(x, pts[keep], rcond=None)
     resid = pts[keep] - x @ coef
-    m = int(keep.sum())
-    rms = math.sqrt(float(np.sum(resid * resid)) / (2.0 * max(m - 3, 1)))
+    count = int(keep.sum())
+    rms = math.sqrt(float(np.sum(resid * resid)) / (2.0 * max(count - 3, 1)))
     cov = np.linalg.inv(x.T @ x) * rms * rms
-    a, b = coef[1], coef[2]
-    use_a = abs(fold_angle(_displayed_deg(*a))) <= 45.0
-    row, column, r_index = (a, b, 1) if use_a else (b, a, 2)
-    indices = ij[keep][:, [0, 1] if use_a else [1, 0]]
-    sign = 1.0 if row[0] >= 0 else -1.0
-    row, indices = row * sign, indices * np.array([sign, 1.0])
-    sigma = math.degrees(math.sqrt(cov[r_index, r_index]) / math.hypot(*row))
+    row, column = coef[1], coef[2]
+    sigma = math.degrees(math.sqrt(cov[1, 1]) / math.hypot(*row))
     return LatticeFit(origin=(float(coef[0, 0]), float(coef[0, 1])), row=(float(row[0]), float(row[1])),
-                      column=(float(column[0]), float(column[1])), angle_deg=fold_angle(_displayed_deg(*row), 90.0),
-                      angle_sigma_deg=sigma, rms_px=rms, centres=pts[keep], indices=indices)
+                      column=(float(column[0]), float(column[1])),
+                      angle_deg=fold_angle(_displayed_deg(*row), period, hint), angle_sigma_deg=sigma, rms_px=rms,
+                      centres=pts[keep], indices=ij[keep], kind=kind, period_deg=period)
 
 
 # -------------------------------------------------------------------------------------------------- long baseline

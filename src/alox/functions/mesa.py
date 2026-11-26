@@ -92,8 +92,19 @@ alone without a Process Job, ``mapping`` for a Zone ID ≥ "1") when ``log.savem
 ``general.saveOverlay`` (T) and a new live image first when ``general.saveOverlayRes`` (T) is F.
 
 **measure_mesa** (``cast``): :func:`alox.api.reports.mesa_event` with ``Type_Measure_Rate`` average / median / fitted
-/ surface / circumscribed / inscribed, ``Remaining_time`` = the remaining seconds as ``%H:%M:%S`` (86 400 s =
-"24:00:00" when the rate cannot be estimated), positions in wafer mm, the monochromator wavelength.
+/ surface / circumscribed / inscribed (LabVIEW) / Depth / Height_Y / Width_X (the Python-only measure types, owner
+S2 / S3; their values ``Depth``, ``Height_Y``, ``Width_X`` are added to ``Oxyd_Diameter`` when measured),
+``Remaining_time`` = the remaining seconds as ``%H:%M:%S`` (86 400 s = "24:00:00" when the rate cannot be
+estimated), positions in wafer mm, the monochromator wavelength.
+
+**Measure types** (``measure.oxyd.measuretype``, :class:`alox.vision.stats.OxideMeasureType`): the sample of
+``Oxyd Measures`` and the rate fit use the selected series. ``DEPTH`` (Line mesas, owner S3 "depth only, never
+median"): the oxidised depth per side, which **grows**; the rate is ``|slope|`` as for the diameters and the
+remaining time is to the depth ``Oxyd Target``: with ``DEPTH`` the target (``measure.oxyd.oxydtarget`` or the
+request's ``target``) **is a depth per side in µm**, not an aperture diameter (a stripe of external width W reaches an
+aperture A at the depth ``(W − A)/2``); a falling depth is the "should not happen" case (86 400 s), as a rising
+diameter is (:func:`alox.vision.stats.remaining_time` ``increasing``). ``HEIGHT_Y`` / ``WIDTH_X`` (Rectangle mesas,
+owner S2): the aperture's sides along the image Y and X axes, shrinking as the diameters; the target is that side.
 
 Reproduced (LabVIEW): the states, transitions, retry counts and loops above; status codes; profile keys and defaults
 (bundle d); the request overrides (Part 1 §2.6); the averaged measurement and the rate fit; the error/failed/stopped
@@ -197,6 +208,7 @@ from alox.functions.services import Services, Text
 from alox.functions.tracking import TrackingParams, setting, stage_coordinate_system
 from alox.vision.circles import Circle
 from alox.vision.stats import (
+    GROWING_MEASURES,
     INSUFFICIENT_POINTS,
     SERIES,
     AveragedMeasurement,
@@ -238,11 +250,15 @@ log = logging.getLogger(__name__)
 REPORT_NAME = "measure_mesa"
 #: ``Best Circle`` constant of ``avg`` before any detection (centre of a 2448 × 2048 sensor, radius 30 px).
 DEFAULT_CIRCLE = Circle(1224.0, 1024.0, 30.0)
-#: ``Oxyd Measure Type`` → ``Type_Measure_Rate`` (``cast d1…d6``).
+#: ``Oxyd Measure Type`` → ``Type_Measure_Rate`` (``cast d1…d6``; the types 6…8 are Python only).
 MEASURE_TYPE_NAMES: Mapping[OxideMeasureType, str] = {
     OxideMeasureType.MEAN: "average", OxideMeasureType.MEDIAN: "median", OxideMeasureType.FIT: "fitted",
     OxideMeasureType.SURFACE: "surface", OxideMeasureType.CIRCUMSCRIBED: "circumscribed",
-    OxideMeasureType.INSCRIBED: "inscribed"}
+    OxideMeasureType.INSCRIBED: "inscribed", OxideMeasureType.DEPTH: "Depth", OxideMeasureType.HEIGHT_Y: "Height_Y",
+    OxideMeasureType.WIDTH_X: "Width_X"}
+#: The overlay / log name of the value of the Python-only measure types (``diameter`` for the others).
+_VALUE_NAMES: Mapping[OxideMeasureType, str] = {OxideMeasureType.DEPTH: "depth", OxideMeasureType.HEIGHT_Y: "height y",
+                                                OxideMeasureType.WIDTH_X: "width x"}
 #: LabVIEW timestamps count seconds from 1904-01-01 UTC (the ``.mesa`` file and the graph).
 LABVIEW_EPOCH_OFFSET_S = 2_082_844_800.0
 #: "XY Move timeout ?" (sm d29): ``alox_error`` 9560.
@@ -472,7 +488,8 @@ class MesaOptions:
 # ================================================================================================== report
 @dataclass(frozen=True)
 class OxydDiameters:
-    """``Oxyd`` cluster of the report (µm; ``circularity`` = Circumscribed/Inscribed)."""
+    """``Oxyd`` cluster of the report (µm; ``circularity`` = Circumscribed/Inscribed), plus the Python-only
+    ``depth`` (Line: oxidised depth per side), ``height_y`` and ``width_x`` (Rectangle: the aperture's sides)."""
 
     fit: float = math.nan
     median: float = math.nan
@@ -483,6 +500,9 @@ class OxydDiameters:
     circularity: float = math.nan
     measure_type: OxideMeasureType = OxideMeasureType.MEAN
     stdev_fit: float = math.nan
+    depth: float = math.nan
+    height_y: float = math.nan
+    width_x: float = math.nan
 
 
 @dataclass(frozen=True)
@@ -524,7 +544,8 @@ def mesa_event(report: MesaReport) -> Any:
     return reports.mesa_event(
         report.job, unix_time=report.timestamp, external_fitted=report.external_fit_um,
         oxyd={"Fitted": o.fit, "Median": o.median, "Average": o.average, "Surface": o.surface,
-              "Inscribed": o.inscribed, "Circumscribed": o.circumscribed, "Circularity": o.circularity},
+              "Inscribed": o.inscribed, "Circumscribed": o.circumscribed, "Circularity": o.circularity,
+              "Depth": o.depth, "Height_Y": o.height_y, "Width_X": o.width_x},
         measure_type=MEASURE_TYPE_NAMES[o.measure_type], stddev=o.stdev_fit, rate=report.rate_um_per_min,
         remaining=format_hms(report.remaining_s), position=report.position, wavelength=report.wavelength_nm)
 
@@ -1123,7 +1144,8 @@ class _MesaJob:
                 d = report.diameters_um
                 values = {"external": d.external, "fit": d.fit, "median": d.median, "mean": d.mean,
                           "surface": d.surface, "inscribed": d.inscribed, "circumscribed": d.circumscribed,
-                          "circularity": d.circ_insc_ratio}
+                          "circularity": d.circ_insc_ratio, "depth": d.depth, "height_y": d.height_y,
+                          "width_x": d.width_x}
             except _STEP_ERRORS as exc:
                 self.last_ll_error = exc
                 self.log_error("MESA (Measure)", exc)
@@ -1165,7 +1187,8 @@ class _MesaJob:
         ts = [t for t, _ in ss.samples]
         ds = [d for _, d in ss.samples]
         est = estimate_oxidation(ts, ds, target_um=p.oxyd_target_um, regression_time_s=p.line_reg_time_s,
-                                 min_points=self.o.min_fit_points)
+                                 min_points=self.o.min_fit_points,
+                                 increasing=averaged.measure_type in GROWING_MEASURES)   # DEPTH: a depth target
         if est.error is not None and est.error.code == INSUFFICIENT_POINTS and ti - ss.t0 > p.line_reg_time_s:
             self.log_error("MESA (Measure)", est.error)              # "Log Insuf. #points warning?"; 9004 cleared
         if self.g.wl_retry:
@@ -1196,7 +1219,8 @@ class _MesaJob:
         oxyd = OxydDiameters(fit=a["fit"], median=a["median"], average=a["mean"], surface=a["surface"],
                              inscribed=a["inscribed"], circumscribed=a["circumscribed"],
                              circularity=a["circularity"], measure_type=averaged.measure_type,
-                             stdev_fit=sample_std(averaged.filters["fit"].final))
+                             stdev_fit=sample_std(averaged.filters["fit"].final), depth=a["depth"],
+                             height_y=a["height_y"], width_x=a["width_x"])
         rem = est.remaining
         fitted: tuple[tuple[float, float], ...] = ()
         linear = None
@@ -1221,7 +1245,8 @@ class _MesaJob:
         if p.overlay_rate:
             texts.append(f"Oxyd rate: {report.rate_um_per_min:.3f} um/min")
         if p.overlay_diameter:
-            texts.append(f"Oxyd diameter: {report.oxyd_diameter_um:.3f} um")
+            name = _VALUE_NAMES.get(report.oxyd.measure_type, "diameter")
+            texts.append(f"Oxyd {name}: {report.oxyd_diameter_um:.3f} um")
         if p.overlay_status:
             texts.append(f"Status: {self.state.value}")
         if not texts:
@@ -1313,6 +1338,8 @@ class _MesaJob:
         values = (("Ext Diam", r.external_fit_um), ("Oxyd fit diam", o.fit), ("Oxyd med diam", o.median),
                   ("Oxyd ave diam", o.average), ("Oxyd surf diam", o.surface), ("Oxyd inscr diam", o.inscribed),
                   ("Oxyd circum diam", o.circumscribed))
+        if o.measure_type in _VALUE_NAMES:                         # Python-only types: their value too
+            values += ((f"Oxyd {_VALUE_NAMES[o.measure_type]}", r.oxyd_diameter_um),)
         text = ", ".join(f"{label}: {value:.3f} µm" for label, value in values)
         self.log("info", f"MESA (Measurement finished OK): MESA (Finished) - Results: {text}")
         if self.report is not None:
@@ -1360,5 +1387,6 @@ class _MesaJob:
 
 
 #: Prefixes of the texts :meth:`_MesaJob.display_results` adds (replaced at every measurement).
-_TEXT_PREFIXES = ("Remaining time: ", "Oxyd rate: ", "Oxyd diameter: ", "Status: ")
+_TEXT_PREFIXES = ("Remaining time: ", "Oxyd rate: ", "Oxyd diameter: ", "Oxyd depth: ", "Oxyd height y: ", "Oxyd width x: ",
+                  "Status: ")
 

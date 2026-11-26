@@ -138,14 +138,21 @@ mesa job's Tilt Correction moves (precision table and algorithms: :mod:`alox.vis
   tolerance is another edge: lost). Angle = the line through the points (three with ``First Step`` 0;
   ``atan2(Δy, Δx)`` in wafer mm, folded into ``Angle Expected ± 90°``).
 - **Lattice** (3): no model: ``Measure Tilt (Lattice)`` (311): the mesas of the Low Mag image
-  (:func:`alox.vision.tilt.detect_mesas`), the grid's row direction and pitches (:func:`alox.vision.tilt.
-  fit_lattice`, folded to ``Angle Expected ± 45°``), the mesa nearest the image centre as the start. The walk visits
-  ±s₁, ±s₂, … (s₁ = ``First Step`` or :attr:`TiltOptions.lattice_first_pitches` pitches; each offset a whole number
-  of pitches, so that a mesa is at the centre); at each position the mesa of the start row nearest the prediction
+  (:func:`alox.vision.tilt.detect_mesas`), the grid (:func:`alox.vision.tilt.fit_lattice`; owner S6 "can be
+  everything": any lattice type — square, rectangular, hexagonal, centred rectangular, oblique — at any angle to the
+  flat): its reduced basis, its type and rotational symmetry (hexagonal 60°, square 90°, otherwise 180°) and the
+  **row** = a shortest lattice vector (the densest row), the one nearest the expected direction ``Angle Expected +
+  Grid Row Angle`` (``latticeangledeg``: the angle of that row against the wafer X axis by design, 0 = parallel to
+  it), the mesa nearest the image centre as the start. The walk follows that lattice vector: ±s₁, ±s₂, … (s₁ =
+  ``First Step`` or :attr:`TiltOptions.lattice_first_pitches` pitches; each offset a whole multiple of the vector, so
+  that a mesa is at the centre); at each position the mesa of the start row nearest the prediction
   (:func:`alox.vision.tilt.pick_row_mesa`; farther than ¼ of the row spacing off the predicted row: lost, the row
   cannot be told apart); the next half-baseline is at most ``Growth`` × the previous and only as long as the current
   uncertainty keeps the predicted row within that ¼ spacing at 4σ (:func:`alox.vision.tilt.next_baseline_step`),
   until L/2. The row direction must be known to better than (¼ spacing)/s₁ (10 pitches: ±1.4°) from the one image.
+  The tilt is the row's angle (wafer frame) **less the Grid Row Angle**, folded to the lattice symmetry around
+  ``Angle Expected`` (``Angle Expected ± 30°`` hexagonal, ± 45° square, ± 90° otherwise): the rotation of the wafer
+  that the mesa job's Tilt Correction applies, whatever the grid's orientation against the flat.
 - Both: the angle's uncertainty (1σ: the detection errors and :attr:`TiltOptions.stage_repeatability_um` over the
   baseline, or the residuals when larger) in :attr:`TiltReport.uncertainty_deg`, the points in
   :attr:`TiltReport.baseline`; **valid** when the one-image angle (edge: the mean of the images; lattice: the start
@@ -153,9 +160,12 @@ mesa job's Tilt Correction moves (precision table and algorithms: :mod:`alox.vis
   lies within ``Angle Expected ± Angle Range``; ``measure_tilt``, images, data file and ``Finished`` as the other
   methods; the overlay ``TILT ANGLE: %.3f° ± %.3f°``. A whole walk out of range → status 1499, error 9535 (as both
   objects); inconsistent (``TILT INCONSISTENT``), or the feature lost → the next search position (snail), then 9086.
-  The stage is left at the last baseline position.
+  After the walk (complete or lost) the stage goes back to the walk's start position (owner S8 "Start is better"):
+  ``Return To Start`` (312) and ``Start Position OK?`` (313), the rules of ``Move To Pos`` / ``Position OK?``; an
+  error there is logged as a warning and the run goes on (the measurement is done).
 - Recipe keys (:class:`LongBaselineDetection`): ``lblength`` (L, 20 mm), ``lbfirststep`` (0 mm = automatic),
-  ``lbgrowth`` (8), ``lbtolerancedeg`` (consistency, 0.5°), ``lbrefocus`` (F), ``latticepitchum`` (0 µm = measured);
+  ``lbgrowth`` (8), ``lbtolerancedeg`` (consistency, 0.5°), ``lbrefocus`` (F), ``latticepitchum`` (the length of the
+  shortest lattice vector, 0 µm = measured), ``latticeangledeg`` (Grid Row Angle, 0°);
   shared with Straight Edge Detection: ``expectedangledeg``, ``anglerangedeg``, ``edgestrength``, ``edgepolarity``
   (and ``edgesearchdir`` for the polarity's sense). Server settings in :class:`TiltOptions` (``lb_*``,
   ``stage_repeatability_um``, ``lattice_*``). Statuses 310…313 are not in ``tilt_en.lang``.
@@ -301,6 +311,8 @@ class TiltState(StrEnum):
     BASELINE_MOVE = "Move To Baseline Pos"                             # Python only
     BASELINE_POSITION_OK = "Baseline Position OK?"                     # Python only
     BASELINE_MEASURE = "Measure Baseline Point"                        # Python only
+    BASELINE_RETURN = "Return To Start"                                # Python only (owner S8)
+    BASELINE_RETURN_OK = "Start Position OK?"                          # Python only
     NOTIFY_CLIENT = "Notify Client"
     DISPLAY_SAVE = "Display & Save"
     FINISHED = "Finished"
@@ -449,7 +461,9 @@ class LongBaselineDetection:
     ``latticepitchum``; module docstring): the total baseline L (mm), the first half-baseline (mm; 0: L/2 for the
     edge, :attr:`TiltOptions.lattice_first_pitches` pitches for the lattice), the largest ratio between two
     successive half-baselines, the largest difference (°) between the angle seen in the images and the baseline
-    angle, a refocus at every baseline position, the mesa pitch along a row (µm; 0: measured in the image)."""
+    angle, a refocus at every baseline position, the mesa pitch along a row (µm, the shortest lattice vector; 0:
+    measured in the image), the angle of that row against the wafer X axis by design (°, wafer frame,
+    counter-clockwise: 0 when the rows are parallel to the flat's axis; subtracted from the measured row angle)."""
 
     length_mm: float = 20.0
     first_step_mm: float = 0.0
@@ -457,9 +471,11 @@ class LongBaselineDetection:
     consistency_deg: float = 0.5
     refocus: bool = False
     lattice_pitch_um: float = 0.0
+    lattice_angle_deg: float = 0.0
 
     def __post_init__(self) -> None:
-        for name in ("length_mm", "first_step_mm", "growth", "consistency_deg", "lattice_pitch_um"):
+        for name in ("length_mm", "first_step_mm", "growth", "consistency_deg", "lattice_pitch_um",
+                     "lattice_angle_deg"):
             _set(self, name, number(getattr(self, name), name))
         _set(self, "refocus", flag(self.refocus))
         if (self.length_mm <= 0 or self.first_step_mm < 0 or self.growth <= 1 or self.consistency_deg <= 0
@@ -489,7 +505,7 @@ _OBJECT_KEYS: dict[str, tuple[str, Any]] = {
 _BASELINE_KEYS: dict[str, tuple[str, Any]] = {
     "length_mm": ("lblength", 20.0), "first_step_mm": ("lbfirststep", 0.0), "growth": ("lbgrowth", 8.0),
     "consistency_deg": ("lbtolerancedeg", 0.5), "refocus": ("lbrefocus", False),
-    "lattice_pitch_um": ("latticepitchum", 0.0)}
+    "lattice_pitch_um": ("latticepitchum", 0.0), "lattice_angle_deg": ("latticeangledeg", 0.0)}
 
 
 @dataclass(frozen=True)
@@ -593,8 +609,9 @@ class BaselineReport:
     """A long-baseline measurement (Tilt Methods 2 and 3): the feature's points (wafer mm: the edge point nearest the
     image centre, or the mesa of the start row) in the order measured, their offsets along the line (mm) and the stage
     positions (mm) of their images; the line fit (``fit``: angle, uncertainty, length); the angle of the feature seen
-    in the images (wafer frame: the mean of the edge fits, or the lattice of the start image) and the checks;
-    ``start_fit`` the fit of the start image (pixels)."""
+    in the images (wafer frame: the mean of the edge fits, or the lattice of the start image, less the Grid Row
+    Angle) and the checks; ``start_fit`` the fit of the start image (pixels). The lattice's ``fit.angle_deg`` is the
+    row's direction; the tilt is that less the Grid Row Angle."""
 
     method: TiltMethod
     points_mm: tuple[Point, ...]
@@ -755,6 +772,10 @@ class _Walk:
     pitch_along: float = math.nan
     pitch_across: float = math.nan
     horizontal: bool | None = None
+    period: float = 180.0                    # the symmetry of the feature: a line 180°, a lattice its own
+    angle_offset: float = 0.0                # lattice: the Grid Row Angle (the row's angle when the tilt is 0)
+    home: Point = (math.nan, math.nan)       # stage position of the start image (the walk returns there)
+    moved: bool = False                      # a baseline move was commanded
     pending: list[float] = field(default_factory=list)
     target: Point = (math.nan, math.nan)
     target_stage: Point = (math.nan, math.nan)
@@ -840,7 +861,8 @@ class _TiltJob:
             TiltState.DISPLAY_SAVE: self.display_save, TiltState.MEASURE_LONG_BASELINE: self.measure_long_baseline,
             TiltState.MEASURE_LATTICE: self.measure_lattice, TiltState.BASELINE_MOVE: self.baseline_move,
             TiltState.BASELINE_POSITION_OK: self.baseline_position_ok,
-            TiltState.BASELINE_MEASURE: self.baseline_measure}
+            TiltState.BASELINE_MEASURE: self.baseline_measure, TiltState.BASELINE_RETURN: self.baseline_return,
+            TiltState.BASELINE_RETURN_OK: self.baseline_return_ok}
         self.prepare()
         self.publish(TiltState.START)
         try:
@@ -1270,6 +1292,7 @@ class _TiltJob:
 
     def start_walk(self, walk: _Walk, sigma: float, shapes: list[Shape]) -> TiltState:
         walk.add(walk.start, sigma, 0.0, self.current, walk.image_angle if not walk.lattice else None)
+        walk.home = self.current
         walk.pending = [-walk.step, walk.step]
         self.walk, self.walk_shapes = walk, shapes
         self.overlay(shapes)
@@ -1316,11 +1339,15 @@ class _TiltJob:
             image = self.image()
             height, width = image.shape[:2]
             centres = detect_mesas(image)
-            fit = fit_lattice(centres, reference=(width / 2.0, height / 2.0), min_nodes=self.o.lattice_min_mesas)
+            m = self.pixel_map(image)
+            # the expected row direction (wafer frame) as displayed in the image: the hint among the equivalent rows
+            row_deg = se.angle_expected_deg + lb.lattice_angle_deg
+            hint = np.linalg.solve(m[0], [math.cos(math.radians(row_deg)), math.sin(math.radians(row_deg))])
+            fit = fit_lattice(centres, reference=(width / 2.0, height / 2.0), min_nodes=self.o.lattice_min_mesas,
+                              angle_hint_deg=math.degrees(math.atan2(-float(hint[1]), float(hint[0]))))
             if fit is None:
                 self.walk_shapes = self.lattice_shapes(centres, None)
                 return self.walk_lost(f"no mesa grid in the start image ({len(centres)} mesas)", t0)
-            m = self.pixel_map(image)
             ref = fit.centres[int(np.argmin(np.hypot(fit.centres[:, 0] - width / 2.0,
                                                      fit.centres[:, 1] - height / 2.0)))]
             direction = self.wafer_direction(m, fit.row)
@@ -1332,8 +1359,9 @@ class _TiltJob:
             walk = _Walk(lattice=True, start=self.wafer_point(m, ref), direction=direction, half=half,
                          drift_limit=self.o.lattice_row_tolerance * across, step=min(half, first), start_fit=fit,
                          sigma_point=fit.rms_px * px_mm, pitch_along=pitch, pitch_across=across,
-                         image_angle=fold_angle(math.degrees(math.atan2(direction[1], direction[0])), 90.0,
-                                                se.angle_expected_deg))
+                         period=fit.period_deg, angle_offset=lb.lattice_angle_deg,
+                         image_angle=fold_angle(math.degrees(math.atan2(direction[1], direction[0]))
+                                                - lb.lattice_angle_deg, fit.period_deg, se.angle_expected_deg))
         except Stopped:
             raise
         except Exception as exc:                                  # noqa: BLE001 - logged, the tilt stays invalid
@@ -1362,6 +1390,7 @@ class _TiltJob:
         w.offset = offset
         w.target = baseline_target(w.points, w.start, w.direction, offset)
         w.target_stage = wafer_to_stage(w.target, self.origin(), int(stage_coordinate_system(self.s)))
+        w.moved = True
         try:
             self.xy.move_absolute(w.target_stage[0], w.target_stage[1], wait=False)
         except (DeviceError, AloxError) as exc:
@@ -1478,29 +1507,30 @@ class _TiltJob:
         w = self.walk
         assert w is not None
         lb, se = self.p.long_baseline, self.p.straight_edge
-        period = 90.0 if w.lattice else 180.0
+        period = w.period
         fit = fit_baseline(w.points, w.sigmas, extra_sigma=self.o.stage_repeatability_um / 1000.0, period=period,
-                           centre=se.angle_expected_deg)
+                           centre=se.angle_expected_deg + w.angle_offset)
+        angle = fit.angle_deg - w.angle_offset                      # lattice: the row's angle less the Grid Row Angle
         if w.lattice:
-            image_angle = fold_angle(w.image_angle, period, fit.angle_deg)
+            image_angle = fold_angle(w.image_angle, period, angle)
         else:                                                      # the mean direction modulo 180°
             a = np.radians(np.asarray(w.image_angles)) * 2.0
             image_angle = fold_angle(math.degrees(math.atan2(np.sin(a).sum(), np.cos(a).sum()) / 2.0), period,
-                                     fit.angle_deg)
-        consistent = abs(image_angle - fit.angle_deg) <= lb.consistency_deg
-        in_range = abs(fit.angle_deg - se.angle_expected_deg) <= se.angle_range_deg
-        self.angle, self.uncertainty, self.valid = fit.angle_deg, fit.sigma_deg, consistent and in_range
+                                     angle)
+        consistent = abs(image_angle - angle) <= lb.consistency_deg
+        in_range = abs(angle - se.angle_expected_deg) <= se.angle_range_deg
+        self.angle, self.uncertainty, self.valid = angle, fit.sigma_deg, consistent and in_range
         if self.valid:
-            message = f"TILT ANGLE: {fit.angle_deg:.3f}° ± {fit.sigma_deg:.3f}°"
+            message = f"TILT ANGLE: {angle:.3f}° ± {fit.sigma_deg:.3f}°"
         else:
             message = "TILT INCONSISTENT" if not consistent else "TILT NOT FOUND/INVALID"
-            app_log(self.s, "warning", f"Tilt (Baseline): {fit.angle_deg:.4f}° over {fit.length:.3f} mm, images "
+            app_log(self.s, "warning", f"Tilt (Baseline): {angle:.4f}° over {fit.length:.3f} mm, images "
                                        f"{image_angle:.4f}°: {'out of range' if consistent else 'inconsistent'}")
         self.baseline = self.baseline_report(fit, image_angle, True, consistent, in_range, message)
         self.overlay(self.walk_shapes + (self.alarm(message, self.valid) if self.p.overlay_tilt else []))
         self.event("TILT Measured", angle=self.angle, valid=self.valid, uncertainty=self.uncertainty,
                    baseline_mm=fit.length, image_angle=image_angle)
-        return TiltState.NOTIFY_CLIENT
+        return self.walk_end()
 
     def walk_lost(self, reason: str, t0: float) -> TiltState:
         """The feature was not found (start image) or lost (baseline position): no tilt at this search position."""
@@ -1508,14 +1538,61 @@ class _TiltJob:
         w = self.walk
         fit = None
         if w is not None and len(w.points) >= 2:
-            fit = fit_baseline(w.points, w.sigmas, period=90.0 if w.lattice else 180.0,
-                               centre=self.p.straight_edge.angle_expected_deg)
+            fit = fit_baseline(w.points, w.sigmas, period=w.period,
+                               centre=self.p.straight_edge.angle_expected_deg + w.angle_offset)
         self.angle, self.valid, self.uncertainty = math.nan, False, math.nan
         self.baseline = self.baseline_report(fit, math.nan, False, False, False, "TILT NOT FOUND/INVALID")
         app_log(self.s, "warning", f"Tilt (Baseline): {reason}")
         self.overlay(self.walk_shapes + (self.alarm("TILT NOT FOUND/INVALID", False) if self.p.overlay_tilt else []))
         self.event("TILT Measured", angle=self.angle, valid=False, lost=reason)
-        return TiltState.NOTIFY_CLIENT
+        return self.walk_end()
+
+    def walk_end(self) -> TiltState:
+        """The end of a walk: back to its start position when the stage left it (owner S8), else Notify Client."""
+        w = self.walk
+        if w is None or not w.moved:
+            return TiltState.NOTIFY_CLIENT
+        self.error_count = 0
+        return TiltState.BASELINE_RETURN
+
+    def baseline_return(self) -> TiltState:
+        """"Return To Start" (Python only, owner S8 "Start is better"): the stage back to the position of the walk's
+        start image; refused moves retried as ``Move To Pos``, then logged (the run goes on: the tilt is measured)."""
+        self.set_status(TiltStatus.MOVE_BASELINE)                  # 312
+        w = self.walk
+        assert w is not None
+        try:
+            self.xy.move_absolute(w.home[0], w.home[1], wait=False)
+        except (DeviceError, AloxError) as exc:
+            self.move_t = self.s.clock()
+            if self.error_count >= self.o.move_retries:
+                app_log(self.s, "warning", f"Tilt (Return To Start): {exc}")
+                return TiltState.NOTIFY_CLIENT
+            self.error_count += 1
+            log.warning("tilt: move back to %s failed (%d): %s", w.home, self.error_count, exc)
+            return TiltState.BASELINE_RETURN
+        self.error_count = 0
+        self.move_t = self.s.clock()
+        self.event("TILT Moving", target=w.home, returning=True)
+        return TiltState.BASELINE_RETURN_OK
+
+    def baseline_return_ok(self) -> TiltState:
+        """"Start Position OK?": the tolerance of ``Position OK?``; after the move timeout a warning, and the run goes
+        on."""
+        self.set_status(TiltStatus.WAIT_MOVE_BASELINE)             # 313
+        w = self.walk
+        assert w is not None
+        pos = self.read_position()
+        tol = self.o.position_tolerance_mm
+        if pos is not None and all(t - tol <= v <= t + tol for v, t in zip(pos, w.home, strict=True)):
+            self.current = pos
+            self.event("TILT Moving", reached=True, returned=True)
+            return TiltState.NOTIFY_CLIENT
+        if self.s.clock() - self.move_t > self.o.move_timeout_s:
+            app_log(self.s, "warning", f"Tilt (Return To Start): start position {w.home} not reached, at {pos}")
+            return TiltState.NOTIFY_CLIENT
+        self.pause(self.o.poll_s)
+        return TiltState.BASELINE_RETURN_OK
 
     def baseline_report(self, fit: BaselineFit | None, image_angle: float, complete: bool, consistent: bool,
                         in_range: bool, message: str) -> BaselineReport:

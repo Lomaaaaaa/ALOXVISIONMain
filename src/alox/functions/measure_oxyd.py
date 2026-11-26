@@ -54,7 +54,8 @@ store). The results are in **pixels**, as LabVIEW's; :attr:`MeasureOxydReport.di
    mesa (here: the mean of the mesa segments' midpoints; ``Circle In`` without mesa): the first and last edges are the
    two borders of the non-oxidised strip; distances and robust mean: the aperture width;
 4. diameters (pixels, the bundle of ``d13``): External = the mesa width; Fit = Inscribed = the aperture width
-   (``ZERO → NaN``); Median = ``(External − Fit)/2``, the oxidised depth per side (NaN without a mesa); Mean = the
+   (``ZERO → NaN``); Depth = ``(External − Fit)/2``, the oxidised depth per side (NaN without a mesa; LabVIEW put it
+   in Median, owner S3 "depth only, never median": its own field, measure type ``DEPTH``, Median NaN); Mean = the
    mean of the aperture distances; STDDEV = their sample standard deviation; Diameters Coordinates / Lengths = the
    first ↔ last segments of the oxide lines and their lengths; Points OXYD / MESA Used = their first and last edges;
    Surface, Circumscribed, Circ/Insc Ratio, Accuracy: their wires were not legible in ``d13``, NaN here; then steps
@@ -73,8 +74,13 @@ inscribed and circumscribed diameters of :func:`alox.vision.circles.contour_diam
 = its longer side, height = the shorter, angle in [0, 180)), :attr:`MeasureOxydReport.mesa_shape` /
 :attr:`MeasureOxydReport.oxyd_shape`. Diameters (the bundle of ``d70``): External = the mesa ``equivalent_diam_px``
 (``x*1``); Fit = the oxide ``equivalent_diam_px``; Median = 2 × the median distance of the oxide points to the oxide
-centroid (the chord loop, inferred); Surface = the oxide ``height_px``; Mean, Inscribed, Circumscribed, Circ/Insc,
-STDDEV, Accuracy: the constant 0 in LabVIEW, NaN here (not measured); then steps 5–7 as ``Circular``.
+centroid (the chord loop, inferred); Surface = the oxide ``height_px`` in LabVIEW, here (owner S2: the types used are
+Fit, Surface, vertical y, horizontal x) the surface-equivalent diameter ``2·√(A/π)`` of the oxide polygon (the
+same value as Fit, :func:`edge_shape`'s ``equivalent_diam_px``); Height Y / Width X (measure types ``HEIGHT_Y`` /
+``WIDTH_X``, Python only) = the sides of the oxide's minimum-area rectangle, the one closest to the image Y axis and
+the other one (:attr:`EdgeShape.height_y`); Mean, Inscribed, Circumscribed, Circ/Insc, STDDEV, Accuracy: the
+constant 0 in LabVIEW, NaN here (not measured); then steps 5–7 as ``Circular`` (the offset is added to Fit, Median,
+Surface, Height Y and Width X).
 
 Reproduced (LabVIEW): states and transitions; params, profile keys and defaults; the steps above; the overlay switches
 (external circle, mesa search lines and edges, oxide circle, oxide edges, diameters, target circle, measure text);
@@ -94,7 +100,8 @@ Fixed:
   :func:`edge_shape` (no outlier rejection: ``n_rejected`` 0); the constant-0 fields are NaN.
 - The LabVIEW overlays of ``Line`` and ``Rectangle`` were not read: the external and oxide outlines are the two
   borders of the stripe (``Line``) or the minimum-area rectangle (``Rectangle``) instead of circles; the target of
-  ``Line`` is two lines ``Target Diam`` apart along the stripe.
+  ``Line`` is two lines ``Target Diam`` apart along the stripe; with the measure type ``DEPTH`` the target
+  (``measure.oxyd.oxydtarget``) is an oxidised depth per side, drawn ``Target`` inside each mesa border.
 - ``measure.vcsel.maxMesaDiam`` defaults to 40 µm (owner R10; LabVIEW 0 never found the mesa).
 - The global ``MEAS MESA RUNNING`` (which silenced error 9022 inside the HL mesa) is not used: the mandatory flags
   decide.
@@ -195,7 +202,11 @@ _DIRECTION_LABELS = {SearchDirection.OUTSIDE_TO_INSIDE: "Outside To Inside",
 _POLARITY_LABELS = {EdgePolarity.ALL: "All", EdgePolarity.RISING: "Rising Edges", EdgePolarity.FALLING: "Falling Edges"}
 _MEASURE_LABELS = {OxideMeasureType.MEAN: "Mean", OxideMeasureType.MEDIAN: "Median", OxideMeasureType.FIT: "Fit",
                    OxideMeasureType.SURFACE: "Surface", OxideMeasureType.CIRCUMSCRIBED: "Circumscribed",
-                   OxideMeasureType.INSCRIBED: "Inscribed"}
+                   OxideMeasureType.INSCRIBED: "Inscribed", OxideMeasureType.DEPTH: "Depth",
+                   OxideMeasureType.HEIGHT_Y: "Height Y", OxideMeasureType.WIDTH_X: "Width X"}
+#: The overlay text of the measure type (``Oxyd Diam.`` for the diameters).
+_MEASURE_TEXTS = {OxideMeasureType.DEPTH: "Oxyd Depth", OxideMeasureType.HEIGHT_Y: "Oxyd Height Y",
+                  OxideMeasureType.WIDTH_X: "Oxyd Width X"}
 
 
 def _labelled(cls: type, value: Any, labels: dict[Any, str], what: str) -> Any:
@@ -356,7 +367,9 @@ class MeasureOxydParams:
 # ================================================================================================== report
 @dataclass(frozen=True)
 class DiametersReport:
-    """``alox_typedef_measure_mesa_diameters_report`` (pixels; ratio and accuracy unitless)."""
+    """``alox_typedef_measure_mesa_diameters_report`` (pixels; ratio and accuracy unitless), plus the Python-only
+    ``depth`` (``Line``: the oxidised depth per side) and ``height_y`` / ``width_x`` (``Rectangle``: the aperture's
+    sides along the image Y and X axes), NaN for the other shapes."""
 
     external: float = math.nan
     fit: float = math.nan
@@ -368,19 +381,25 @@ class DiametersReport:
     circ_insc_ratio: float = math.nan
     stddev: float = math.nan
     accuracy: float = math.nan
+    depth: float = math.nan
+    height_y: float = math.nan
+    width_x: float = math.nan
 
     def scaled(self, pixel_size_um: float) -> DiametersReport:
-        """``alox_tools_convert_mesa_measures_to_micrometers``: External…Circumscribed × pixel size (µm)."""
+        """``alox_tools_convert_mesa_measures_to_micrometers``: External…Circumscribed (and the depth, height and
+        width) × pixel size (µm)."""
         k = pixel_size_um
         return DiametersReport(self.external * k, self.fit * k, self.median * k, self.mean * k, self.surface * k,
                                self.inscribed * k, self.circumscribed * k, self.circ_insc_ratio, self.stddev,
-                               self.accuracy)
+                               self.accuracy, self.depth * k, self.height_y * k, self.width_x * k)
 
     def selected(self, measure_type: OxideMeasureType) -> float:
-        """The diameter of ``Oxyd Measure Type``."""
+        """The diameter of ``Oxyd Measure Type`` (the depth, height or width for the types 6…8)."""
         return {OxideMeasureType.MEAN: self.mean, OxideMeasureType.MEDIAN: self.median, OxideMeasureType.FIT: self.fit,
                 OxideMeasureType.SURFACE: self.surface, OxideMeasureType.CIRCUMSCRIBED: self.circumscribed,
-                OxideMeasureType.INSCRIBED: self.inscribed}[OxideMeasureType(measure_type)]
+                OxideMeasureType.INSCRIBED: self.inscribed, OxideMeasureType.DEPTH: self.depth,
+                OxideMeasureType.HEIGHT_Y: self.height_y,
+                OxideMeasureType.WIDTH_X: self.width_x}[OxideMeasureType(measure_type)]
 
 
 Segment = tuple[float, float, float, float]
@@ -424,6 +443,23 @@ class EdgeShape:
     @property
     def angle(self) -> float:
         return self.rect.angle % 180.0
+
+    @property
+    def _long_side_vertical(self) -> bool:
+        return 45.0 < self.angle < 135.0
+
+    @property
+    def height_y(self) -> float:
+        """The side of the minimum-area rectangle closest to the image Y axis (vertical as displayed): ``width`` (the
+        long side) when its direction is within 45° of vertical (``angle`` in (45°, 135°)), else ``height``. A
+        rectangle turned by a small angle keeps its vertical side as the height whichever side is longer; at
+        exactly 45° the short side is the height."""
+        return self.rect.width if self._long_side_vertical else self.rect.height
+
+    @property
+    def width_x(self) -> float:
+        """The other side of the minimum-area rectangle (closest to the image X axis), see :attr:`height_y`."""
+        return self.rect.height if self._long_side_vertical else self.rect.width
 
 
 def _min_area_rect(points: np.ndarray) -> RotatedRect:
@@ -736,10 +772,10 @@ class _MeasureJob:
         fit = width if width else math.nan                                          # ZERO -> NaN
         external = mesa_width if mesa_found else 2.0 * p.circle.radius
         values = {"fit": fit, "mean": float(np.mean(ox_d)) if ox_d else math.nan, "inscribed": fit,
-                  "median": math.nan, "surface": math.nan, "circumscribed": math.nan}
+                  "median": math.nan, "surface": math.nan, "circumscribed": math.nan, "depth": math.nan}
         bounded_ext, values = self._bounded(external, values, ("fit", "mean", "inscribed"))
         if mesa_found and not math.isnan(values["fit"]):
-            values["median"] = (external - values["fit"]) / 2.0                      # oxidised depth per side
+            values["depth"] = (external - values["fit"]) / 2.0                       # oxidised depth per side (S3)
         diameters = DiametersReport(external=bounded_ext, stddev=sample_std(ox_d) if ox_d else math.nan, **values)
         ox_centre = (float(np.mean([(a.x + b.x) / 2.0 for a, b in ox_pairs])),
                      float(np.mean([(a.y + b.y) / 2.0 for a, b in ox_pairs]))) if oxyd_found else centre
@@ -770,15 +806,17 @@ class _MeasureJob:
         external = mesa_shape.equivalent_diameter if mesa_shape is not None else 2.0 * p.circle.radius
         chords: tuple[Segment, ...] = ()
         lengths: tuple[float, ...] = ()
-        values = dict.fromkeys(("fit", "median", "mean", "surface", "inscribed", "circumscribed"), math.nan)
+        values = dict.fromkeys(("fit", "median", "mean", "surface", "inscribed", "circumscribed", "height_y",
+                                "width_x"), math.nan)
         if oxyd_shape is not None:
             ox, oy = oxyd_shape.center
             radii = np.hypot(points[:, 0] - ox, points[:, 1] - oy)
             chords = tuple((2 * ox - x, 2 * oy - y, x, y) for x, y in points)
             lengths = tuple(float(2.0 * r) for r in radii)
             values.update(fit=oxyd_shape.equivalent_diameter, median=2.0 * float(np.median(radii)),
-                          surface=oxyd_shape.height)
-        bounded_ext, values = self._bounded(external, values, ("fit", "median", "surface"))
+                          surface=2.0 * math.sqrt(oxyd_shape.area / math.pi),        # surface-equivalent (S2)
+                          height_y=oxyd_shape.height_y, width_x=oxyd_shape.width_x)
+        bounded_ext, values = self._bounded(external, values, ("fit", "median", "surface", "height_y", "width_x"))
         return MeasureOxydReport(
             external_circle=Circle(centre[0], centre[1], external / 2.0) if mesa_found else p.circle,
             oxyd_circle=Circle(*oxyd_shape.center, oxyd_shape.equivalent_diameter / 2.0) if oxyd_shape else NAN_CIRCLE,
@@ -832,7 +870,8 @@ class _MeasureJob:
             oxyd += self._outline(r, r.diameter_lines, r.oxyd_shape, r.oxyd_circle, r.oxyd_found, RED)
         if p.overlay_oxyd_measure:
             value = r.diameters.selected(p.oxyd_measure_type) * r.pixel_size_um
-            text = "Oxyd Diam.: -" if math.isnan(value) else f"Oxyd Diam.: {value:.2f} µm"
+            name = _MEASURE_TEXTS.get(p.oxyd_measure_type, "Oxyd Diam.")
+            text = f"{name}: -" if math.isnan(value) else f"{name}: {value:.2f} µm"
             oxyd.append(Text(10.0, 10.0, text, RED, 20))
         edges_shapes: list[Shape] = [Points(r.oxyd_points, YELLOW, 1, marker=3)] \
             if p.overlay_oxyd_edges and r.oxyd_points else []
@@ -841,6 +880,12 @@ class _MeasureJob:
         target: list[Shape] = []
         centre = r.oxyd_circle if not r.oxyd_circle.is_nan else r.external_circle
         half = p.target_diam_um / 2.0 / r.pixel_size_um
+        if r.shape_type is MesaShapeType.LINE and p.oxyd_measure_type is OxideMeasureType.DEPTH:
+            # the target is an oxidised depth per side: a line Target inside each border of the stripe
+            centre = r.external_circle
+            half = centre.radius - p.target_diam_um / r.pixel_size_um if r.mesa_found else math.nan
+            if not half > 0.0:
+                centre = NAN_CIRCLE
         if p.overlay_target and not centre.is_nan and r.shape_type is MesaShapeType.LINE and r.diameter_lines:
             x1, y1, x2, y2 = r.diameter_lines[0]                   # two lines along the stripe, Target Diam apart
             n = math.hypot(x2 - x1, y2 - y1) or 1.0

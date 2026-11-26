@@ -20,12 +20,14 @@ from alox.vision.tilt import (
     fit_edge_line,
     fit_lattice,
     fold_angle,
+    lattice_kind,
     mask_matched_object,
     measure_tilt_straight_edge,
     next_baseline_step,
     noise_sigma,
     pick_row_mesa,
     rake_lines,
+    reduce_basis,
 )
 
 W, H = 240, 180
@@ -199,6 +201,30 @@ def grid_image(angle_deg: float, *, pitch: tuple[float, float] = (25.0, 25.0), r
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
+def lattice_image(a: tuple[float, float], b: tuple[float, float], *, radius: float = 7.0, w: int = 320, h: int = 240,
+                  noise: float = 4.0, seed: int = 1, offset: tuple[float, float] = (3.3, 7.1)) -> np.ndarray:
+    """Discs of ``radius`` px on the lattice of the pixel vectors ``a``, ``b`` (any type), a node at the image centre
+    + ``offset``; anti-aliased, with noise."""
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float64)
+    p = np.stack((xs - w / 2.0 - offset[0], ys - h / 2.0 - offset[1]), axis=-1)
+    basis = np.column_stack((a, b))
+    f = np.rint(p @ np.linalg.inv(basis).T)
+    d = np.full((h, w), np.inf)
+    for di in (-1, 0, 1):                                          # the nearest node among the 3 × 3 around
+        for dj in (-1, 0, 1):
+            node = (f + np.array([di, dj])) @ basis.T
+            d = np.minimum(d, np.hypot(*(p - node).transpose(2, 0, 1)))
+    img = 50.0 + 150.0 / (1.0 + np.exp((d - radius) / 0.7))
+    img += np.random.default_rng(seed).normal(0.0, noise, img.shape)
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def displayed(length: float, angle_deg: float) -> tuple[float, float]:
+    """The pixel vector of ``length`` at ``angle_deg`` counter-clockwise as displayed (image Y down)."""
+    t = math.radians(angle_deg)
+    return length * math.cos(t), -length * math.sin(t)
+
+
 def test_fold_angle():
     assert fold_angle(91.0) == 91.0 - 180.0 and fold_angle(90.0) == 90.0 and fold_angle(-90.0) == 90.0
     assert fold_angle(181.5) == pytest.approx(1.5) and fold_angle(46.0, 90.0) == -44.0 and fold_angle(45.0, 90.0) == 45.0
@@ -261,19 +287,90 @@ def test_lattice_angle_and_pitch_in_one_image(angle, pitch, dark):
     assert len(centres) > 80
     fit = fit_lattice(centres, reference=(160.0, 120.0))
     assert fit is not None and len(fit.centres) == len(centres)
-    assert abs(fold_angle(fit.angle_deg - angle, 90.0)) < 0.005 and -45.0 < fit.angle_deg <= 45.0
+    # the row is the shortest lattice vector: along the generator's rows (angle) when square, else across them
+    # (the 22 px pitch, at angle − 90°); a square grid is symmetric by 90°, a rectangular one by 180° only
+    square = pitch[0] == pitch[1]
+    assert (fit.kind, fit.period_deg) == (("square", 90.0) if square else ("rectangular", 180.0))
+    row_angle = angle if square else angle - 90.0
+    assert abs(fold_angle(fit.angle_deg - row_angle, fit.period_deg)) < 0.005
+    assert -fit.period_deg / 2.0 < fit.angle_deg <= fit.period_deg / 2.0
     assert fit.angle_sigma_deg < 0.003 and fit.rms_px < 0.03
-    # the row is the lattice vector within ±45° of X: its pitch is the one along the rows when |angle| < 45
-    assert fit.pitch_row_px == pytest.approx(pitch[0], abs=0.01) and fit.pitch_across_px == pytest.approx(
-        pitch[1], abs=0.01)
+    assert fit.pitch_row_px == pytest.approx(min(pitch), abs=0.01) and fit.pitch_across_px == pytest.approx(
+        max(pitch), abs=0.01)
     node = fit.node(0, 0)                                          # the node nearest the reference: the true one
     assert math.hypot(node[0] - 163.3, node[1] - 127.1) < 0.05
 
 
 def test_lattice_elongated_grid():
     fit = fit_lattice(detect_mesas(grid_image(2.5, pitch=(40.0, 14.0), radius=4.5)), reference=(160.0, 120.0))
-    assert fit is not None and abs(fit.angle_deg - 2.5) < 0.01
-    assert (fit.pitch_row_px, fit.pitch_across_px) == (pytest.approx(40.0, abs=0.01), pytest.approx(14.0, abs=0.01))
+    assert fit is not None and fit.kind == "rectangular" and abs(fold_angle(fit.angle_deg - (2.5 - 90.0))) < 0.01
+    assert (fit.pitch_row_px, fit.pitch_across_px) == (pytest.approx(14.0, abs=0.01), pytest.approx(40.0, abs=0.01))
+    # the hint picks the sense of the row and the folding centre: the rows (14 px apart) of the 40 px vector are
+    # never chosen, the shortest vector is
+    up = fit_lattice(detect_mesas(grid_image(2.5, pitch=(40.0, 14.0), radius=4.5)), angle_hint_deg=90.0)
+    assert up is not None and up.angle_deg == pytest.approx(92.5, abs=0.01) and up.row[1] < 0
+
+
+@pytest.mark.parametrize("angle", [0.137, 17.3, -25.0, 41.0, 29.9])
+def test_lattice_hexagonal_grid_at_any_angle(angle):
+    """Owner S6: a hexagonal grid at any angle: the reduced basis (two 25 px vectors 60° apart), the row folded to
+    the 60° symmetry around the hint (0°: in (−30°, 30°])."""
+    img = lattice_image(displayed(25.0, angle), displayed(25.0, angle + 60.0))
+    centres = detect_mesas(img)
+    assert len(centres) > 80
+    fit = fit_lattice(centres, reference=(160.0, 120.0))
+    assert fit is not None and len(fit.centres) == len(centres)
+    assert (fit.kind, fit.period_deg) == ("hexagonal", 60.0)
+    assert abs(fold_angle(fit.angle_deg - angle, 60.0)) < 0.005 and -30.0 < fit.angle_deg <= 30.0
+    assert fit.angle_sigma_deg < 0.003 and fit.rms_px < 0.03
+    assert fit.pitch_row_px == pytest.approx(25.0, abs=0.01)
+    assert fit.pitch_across_px == pytest.approx(25.0 * math.sqrt(3.0) / 2.0, abs=0.01)
+    assert math.hypot(*fit.column) == pytest.approx(25.0, abs=0.01)
+    node = fit.node(0, 0)
+    assert math.hypot(node[0] - 163.3, node[1] - 127.1) < 0.05
+    i, j = fit.indices[5]                                          # the indices are on (row, column)
+    assert np.hypot(*(np.asarray(fit.node(i, j)) - fit.centres[5])) < 0.2
+    hinted = fit_lattice(centres, angle_hint_deg=angle + 120.0)    # another of the six equivalent rows
+    assert hinted is not None and abs(hinted.angle_deg - (angle + 120.0)) < 0.005
+
+
+@pytest.mark.parametrize(("angle", "a", "b", "between"), [(17.0, 25.0, 32.0, 75.0), (-62.0, 24.0, 29.0, 104.0)])
+def test_lattice_oblique_grid(angle, a, b, between):
+    """Owner S6: a general oblique grid: the row is the shortest vector (``a`` at ``angle``), symmetric by 180° only."""
+    img = lattice_image(displayed(a, angle), displayed(b, angle + between), radius=6.0)
+    fit = fit_lattice(detect_mesas(img), reference=(160.0, 120.0))
+    assert fit is not None and (fit.kind, fit.period_deg) == ("oblique", 180.0)
+    assert abs(fit.angle_deg - angle) < 0.01 and fit.angle_sigma_deg < 0.005
+    assert fit.pitch_row_px == pytest.approx(a, abs=0.01)
+    assert fit.pitch_across_px == pytest.approx(b * math.sin(math.radians(between)), abs=0.01)
+    node = fit.node(0, 0)
+    assert math.hypot(node[0] - 163.3, node[1] - 127.1) < 0.05
+    reverse = fit_lattice(detect_mesas(img), angle_hint_deg=angle + 180.0)
+    assert reverse is not None and reverse.angle_deg == pytest.approx(angle + 180.0, abs=0.01)
+
+
+def test_dense_hexagonal_grid_mesas_are_the_majority_phase():
+    """Discs of 21 px on a 25 px hexagonal grid cover 64 % of the image: the mesas are the larger phase (the
+    background between them is one connected particle), detect_mesas still finds them."""
+    img = lattice_image(displayed(25.0, 8.0), displayed(25.0, 68.0), radius=10.5)
+    assert (img > 125).mean() > 0.5
+    centres = detect_mesas(img)
+    assert len(centres) > 80 and len(detect_mesas(img, bright=False)) == 0
+    fit = fit_lattice(centres, reference=(160.0, 120.0))
+    assert fit is not None and fit.kind == "hexagonal" and abs(fit.angle_deg - 8.0) < 0.01
+
+
+def test_reduce_basis_and_lattice_kind():
+    reduced, m = reduce_basis((25.0, 0.0), (75.0 + 12.5, 25.0 * math.sqrt(3.0) / 2.0))   # hexagonal, long basis
+    assert np.allclose(np.hypot(*reduced), 25.0) and np.allclose(reduced, np.column_stack(
+        ((25.0, 0.0), (87.5, 25.0 * math.sqrt(3.0) / 2.0))) @ m)
+    assert abs(round(np.linalg.det(m))) == 1 and lattice_kind(*reduced.T) == "hexagonal"
+    assert lattice_kind((20.0, 0.0), (0.0, 20.3)) == "square" and lattice_kind((20.0, 0.0), (0.0, 30.0)) == \
+        "rectangular"
+    assert lattice_kind((20.0, 0.0), (10.0, 30.0)) == "centred rectangular"           # a staggered grid
+    assert lattice_kind((20.0, 0.0), (7.0, 30.0)) == "oblique"
+    with pytest.raises(ValueError):
+        reduce_basis((1.0, 2.0), (2.0, 4.0))
 
 
 def test_lattice_needs_a_pattern():

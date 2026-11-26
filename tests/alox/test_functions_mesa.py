@@ -4,7 +4,9 @@ devices and a fake clock (no real waiting)."""
 
 from __future__ import annotations
 
+import math
 import threading
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -30,6 +32,7 @@ from alox.functions.measure_oxyd import (
 from alox.functions.mesa import (
     DEFAULT_CIRCLE,
     LABVIEW_EPOCH_OFFSET_S,
+    MEASURE_TYPE_NAMES,
     MesaError,
     MesaExposureMode,
     MesaFailed,
@@ -509,6 +512,34 @@ def test_continuous_rate_fit_remaining_time_and_refocus_every_refocus_time(tmp_p
     assert rig.status.codes.count(436) >= 1
 
 
+def test_line_mesa_measured_as_depth_with_a_depth_target() -> None:
+    """Owner S3: a Line (stripe) mesa measured as DEPTH, the oxidised depth per side (Median stays NaN). The depth
+    grows (3 µm/min here) and the target is a depth: 15 µm = the aperture 10 µm of a 40 µm stripe, at t = 200 s."""
+    rig = Rig(profile={"measure.oxyd.measuretype": int(OxideMeasureType.DEPTH)})
+    t = rig.t
+
+    def measure(_p: Any, ctx: FunctionContext, i: int) -> MeasureOxydReport:
+        if i + 1 >= 30:
+            ctx.stop_event.set()
+        fit = D0 + SLOPE * (t.clock() - 1000.0)
+        d = DiametersReport(external=40.0, fit=fit, mean=fit, inscribed=fit, stddev=0.1, depth=(40.0 - fit) / 2.0)
+        return MeasureOxydReport(Circle(100, 90, 20.0), Circle(100, 90, fit / 2), d, (), (), (), True, True, 1.0,
+                                 (), (), (), (), pixel_size_um=1.0)
+    rig.fakes[FunctionName.MEASURE_OXYD].behaviour = measure
+    assert rig.run(single(singleshot=False, oxyd_target_um=15.0)) is None
+    last = rig.mesa.last_report
+    assert isinstance(last, MesaReport) and len(last.samples) == 30
+    assert last.oxyd.measure_type is OxideMeasureType.DEPTH and math.isnan(last.oxyd.median)
+    assert last.oxyd_diameter_um == last.oxyd.depth == pytest.approx(last.samples[-1][1])
+    assert last.oxyd.depth == pytest.approx((40.0 - last.oxyd.fit) / 2.0)
+    assert last.rate_um_per_min == pytest.approx(3.0, rel=1e-6) and last.linear_fit.slope > 0
+    expected = (WALL0 + 1000.0 + 200.0) - last.timestamp
+    assert 0.0 < last.remaining_s == pytest.approx(expected, abs=1.0) and last.rate_error is None
+    oxyd = rig.ws("measure_mesa")[-1].data["Oxyd_Diameter"]
+    assert oxyd["Type_Measure_Rate"] == "Depth" and oxyd["Depth"] == f"{last.oxyd.depth:f}"
+    assert oxyd["Median"] == "NaN" and "Height_Y" not in oxyd and "Width_X" not in oxyd
+
+
 def test_continuous_error_sends_error_and_failed_then_restarts() -> None:
     rig = Rig(options=MesaOptions(error_restart_pause_s=2.0))
     calls = {"n": 0}
@@ -579,6 +610,13 @@ def test_mesa_event_measure_type_names_and_remaining_format() -> None:
     assert data["Oxyd_Diameter"]["Type_Measure_Rate"] == "fitted"
     assert data["Oxyd_Diameter"]["Fitted"] == "9.004834" and data["Oxyd_Diameter"]["Circularity"] == "1.255618"
     assert data["Oxyd_Rate"] == {"Rate": "0.058213", "Unit": "um/min", "Remaining_time": "01:09:41"}
+    assert not {"Depth", "Height_Y", "Width_X"} & set(data["Oxyd_Diameter"])          # not measured: LabVIEW's keys
+    rect = replace(report, oxyd=replace(report.oxyd, measure_type=OxideMeasureType.HEIGHT_Y, height_y=6.5,
+                                        width_x=12.25))
+    data = mesa_event(rect).data["Oxyd_Diameter"]
+    assert (data["Type_Measure_Rate"], data["Height_Y"], data["Width_X"]) == ("Height_Y", "6.500000", "12.250000")
+    assert {MEASURE_TYPE_NAMES[t] for t in OxideMeasureType} >= {"Depth", "Height_Y", "Width_X"}
+    assert set(MEASURE_TYPE_NAMES) == set(OxideMeasureType)
 
 
 def test_image_filename() -> None:

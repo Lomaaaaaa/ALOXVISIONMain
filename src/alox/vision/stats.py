@@ -32,6 +32,7 @@ from .geometry import GeometryError, fit_line_ransac
 
 __all__ = [
     "FIT_LINE_ERROR",
+    "GROWING_MEASURES",
     "INSUFFICIENT_POINTS",
     "MAX_REMAINING_TIME_S",
     "SERIES",
@@ -181,7 +182,15 @@ def nan_filter(
 
 
 class OxideMeasureType(IntEnum):
-    """``Oxyd Measure Type`` selector of ``tools_mesa_averaged_measurement d``."""
+    """``Oxyd Measure Type`` selector of ``tools_mesa_averaged_measurement d`` (0…5), plus the Python-only types of
+    the owner's answers S2 / S3 (6…8, appended):
+
+    - ``DEPTH``: the oxidised depth per side of a ``Line`` (stripe) mesa, ``(External − Fit)/2`` (µm). It **grows**
+      while the oxidation runs (the other types shrink): :data:`GROWING_MEASURES`.
+    - ``HEIGHT_Y`` / ``WIDTH_X``: the sides of the oxide aperture's minimum-area rectangle of a ``Rectangle`` mesa,
+      the side closest to the image Y axis (vertical) and the other one (µm;
+      :attr:`alox.functions.measure_oxyd.EdgeShape.height_y`).
+    """
 
     MEAN = 0
     MEDIAN = 1
@@ -189,10 +198,19 @@ class OxideMeasureType(IntEnum):
     SURFACE = 3
     CIRCUMSCRIBED = 4
     INSCRIBED = 5
+    DEPTH = 6
+    HEIGHT_Y = 7
+    WIDTH_X = 8
 
 
-#: Diameter series averaged by ``tools_mesa_averaged_measurement d`` (in that order).
-SERIES = ("external", "fit", "median", "mean", "surface", "inscribed", "circumscribed", "circularity")
+#: The measure types that increase with the oxidation time (the oxidised depth); the others are aperture sizes,
+#: which decrease. The remaining time to the target uses the sense (:func:`remaining_time`, ``increasing``).
+GROWING_MEASURES = frozenset({OxideMeasureType.DEPTH})
+
+#: Diameter series averaged by ``tools_mesa_averaged_measurement d`` (in that order), then the Python-only series of
+#: the types 6…8 (``depth``, ``height_y``, ``width_x``).
+SERIES = ("external", "fit", "median", "mean", "surface", "inscribed", "circumscribed", "circularity", "depth",
+          "height_y", "width_x")
 _SELECTED = {
     OxideMeasureType.MEAN: "mean",
     OxideMeasureType.MEDIAN: "median",
@@ -200,6 +218,9 @@ _SELECTED = {
     OxideMeasureType.SURFACE: "surface",
     OxideMeasureType.CIRCUMSCRIBED: "circumscribed",
     OxideMeasureType.INSCRIBED: "inscribed",
+    OxideMeasureType.DEPTH: "depth",
+    OxideMeasureType.HEIGHT_Y: "height_y",
+    OxideMeasureType.WIDTH_X: "width_x",
 }
 
 
@@ -210,7 +231,7 @@ class AveragedMeasurement:
     averages: dict[str, float]  # mean of each filtered series ("Filter Final"), NaN when empty
     filters: dict[str, NanFilterResult]
     measure_type: OxideMeasureType
-    oxide_diameter: float  # the series selected by measure_type ("Oxyd Diam.")
+    oxide_diameter: float  # the series selected by measure_type ("Oxyd Diam."; the depth for DEPTH)
     n_samples: int  # final sample count of the selected series ("# Samples Oxyd", series inferred)
     oxide_found: bool  # n_samples > 0
     mesa_found: bool  # external average != 0 (NaN counts as found, LabVIEW "≠")
@@ -456,11 +477,13 @@ def remaining_time(
     *,
     target_um: float,
     score_tolerance_um: float = 1.0,
+    increasing: bool = False,
 ) -> RemainingTime:
     """Remaining time to reach ``target_um`` and oxidation rate — ``alox_tools_get_mesa_remaining_time d … d5``.
 
     ``Mesures`` = the fit window (row 0 timestamps, row 1 diameters). Slope > 0 ("Positive slope, should not
-    happen") → 86 400 s. Otherwise ``target time = (target − intercept)/slope``, ``remaining = I64(target time −
+    happen") → 86 400 s; with ``increasing`` (a measure that grows, :data:`GROWING_MEASURES`: the oxidised depth,
+    ``target_um`` is then the depth to reach) the test is reversed: slope < 0 → 86 400 s. Otherwise ``target time = (target − intercept)/slope``, ``remaining = I64(target time −
     last timestamp)``, 0 if negative, at most 86 400 ("max 24 HOURS"). ``rate = |slope·60|`` µm/min. ``score`` = % of
     the points whose vertical distance ``|d_i − (slope·t_i + intercept)|`` is ≤ ``score_tolerance_um`` (HL mesa: 1;
     0 for no point). The ``residual`` is the fit's, passed through.
@@ -469,7 +492,7 @@ def remaining_time(
     d = np.asarray(diameters, dtype=np.float64).ravel()
     n = min(t.size, d.size)
     t, d = t[:n], d[:n]
-    if fit.slope > 0.0:
+    if (fit.slope < 0.0) if increasing else (fit.slope > 0.0):
         seconds = MAX_REMAINING_TIME_S
     else:
         last = float(t[-1]) if n else 0.0
@@ -516,6 +539,7 @@ def estimate_oxidation(
     min_score: float = 30.0,
     score_tolerance_um: float = 1.0,
     seed: int | np.random.Generator | None = 0,
+    increasing: bool = False,
 ) -> OxidationEstimate:
     """"Compute Oxydation Rate & remaining time" of the HL mesa ``Measure MESA`` state
     (``alox_function_hl_mesa_measurement_state_machine d``): window → fit → remaining time.
@@ -523,7 +547,8 @@ def estimate_oxidation(
     Defaults are the constants wired there (``# Min Points`` 10, Fit Options {1000 iterations, max distance 0.1,
     min score 30 %}, Reject Outliers TRUE, score tolerance 1 µm). Fewer than ``min_points`` samples in the window →
     error 9003 (no fit attempted; LabVIEW computes the "Enough Points?" flag but its own error is disabled); a failed
-    fit → 9004. Both are returned in ``error`` with the LabVIEW error-case outputs, never raised.
+    fit → 9004. Both are returned in ``error`` with the LabVIEW error-case outputs, never raised. ``increasing``: the
+    measure grows with time (:func:`remaining_time`).
     """
     window = extract_fit_window(timestamps, diameters, regression_time_s=regression_time_s, min_points=min_points)
     if not window.enough_points:
@@ -545,6 +570,7 @@ def estimate_oxidation(
     except RateEstimationError as err:
         return OxidationEstimate(window, REMAINING_TIME_ERROR, None, err)
     rem = remaining_time(
-        window.timestamps, window.diameters, dfit.fit, target_um=target_um, score_tolerance_um=score_tolerance_um
+        window.timestamps, window.diameters, dfit.fit, target_um=target_um, score_tolerance_um=score_tolerance_um,
+        increasing=increasing,
     )
     return OxidationEstimate(window, rem, dfit, None)

@@ -9,6 +9,7 @@ import pytest
 
 from alox.vision.stats import (
     FIT_LINE_ERROR,
+    GROWING_MEASURES,
     INSUFFICIENT_POINTS,
     MAX_REMAINING_TIME_S,
     LinearFit,
@@ -137,6 +138,24 @@ def test_average_measurements_selects_the_measure_type():
     mean = average_measurements(series, measure_type=0)
     assert mean.oxide_diameter == pytest.approx(8.95)
     assert mean.oxide_raw.tolist() == [8.9, 9.0]
+
+
+def test_python_only_measure_types_are_appended_with_their_series():
+    """Owner S2 / S3: DEPTH (Line), HEIGHT_Y and WIDTH_X (Rectangle) after LabVIEW's six types, with their series."""
+    assert [t.value for t in OxideMeasureType] == list(range(9))
+    assert (OxideMeasureType.DEPTH, OxideMeasureType.HEIGHT_Y, OxideMeasureType.WIDTH_X) == (6, 7, 8)
+    assert GROWING_MEASURES == {OxideMeasureType.DEPTH}
+    series = {"external": [50.0, 50.1], "fit": [30.0, 30.2], "depth": [10.0, 9.95], "height_y": [6.0, 6.1],
+              "width_x": [12.0, 12.2]}
+    for mtype, name, value in ((OxideMeasureType.DEPTH, "depth", 9.975), (OxideMeasureType.HEIGHT_Y, "height_y", 6.05),
+                               (OxideMeasureType.WIDTH_X, "width_x", 12.1)):
+        avg = average_measurements(series, measure_type=mtype)
+        assert avg.oxide_diameter == pytest.approx(value) and avg.averages[name] == pytest.approx(value)
+        assert avg.oxide_found and avg.n_samples == 2 and avg.oxide_filtered.size == 2
+    line = average_measurements(series, measure_type=OxideMeasureType.MEDIAN)
+    assert math.isnan(line.oxide_diameter) and not line.oxide_found      # a Line has no median (depth only)
+    with pytest.raises(ValueError):
+        average_measurements({"Depth": [1.0]})
 
 
 def test_average_measurements_flags():
@@ -270,6 +289,21 @@ def test_remaining_time_rules():
     flat = LinearFit(0.0, 10.0, 0.0, 100.0)  # (target - b)/0 = -inf -> 0, +inf -> 86400
     assert remaining_time(t, [10.0, 10.0], flat, target_um=9.0).seconds == 0.0
     assert remaining_time(t, [10.0, 10.0], flat, target_um=11.0).seconds == MAX_REMAINING_TIME_S
+
+
+def test_remaining_time_of_a_growing_depth():
+    """DEPTH grows with time: the target is a depth to reach, a falling fit is the "should not happen" case."""
+    t = T0 + np.array([0.0, 25.0, 50.0])
+    growing = LinearFit(slope=0.01, intercept=2.0 - 0.01 * T0, residual=0.0, score=100.0)  # d = 2 + 0.01 (t - T0)
+    res = remaining_time(t, growing.at(t), growing, target_um=3.0, increasing=True)   # reached at T0 + 100
+    assert (res.seconds, res.rate_um_per_min, res.score) == (50.0, pytest.approx(0.6), 100.0)
+    assert remaining_time(t, growing.at(t), growing, target_um=2.2, increasing=True).seconds == 0.0   # passed
+    assert remaining_time(t, growing.at(t), growing, target_um=3.0).seconds == MAX_REMAINING_TIME_S   # as a diameter
+    falling = LinearFit(-0.01, 2.0 + 0.01 * T0, 0.0, 100.0)
+    assert remaining_time(t, falling.at(t), falling, target_um=1.0, increasing=True).seconds == MAX_REMAINING_TIME_S
+    ts = T0 + np.arange(40) * 10.0
+    est = estimate_oxidation(ts, 2.0 + 0.001 * (ts - T0), target_um=3.0, regression_time_s=1000.0, increasing=True)
+    assert est.ok and est.remaining.seconds == pytest.approx(1000.0 - 390.0, abs=1.0)
 
 
 def test_remaining_time_rounds_to_whole_seconds_half_even():

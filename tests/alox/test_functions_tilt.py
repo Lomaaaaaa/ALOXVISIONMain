@@ -44,6 +44,7 @@ from alox.functions.tilt import (
 )
 from alox.vision.matching import NumpyMatcher
 from alox.vision.tilt import EdgeMethod, RakeDirection
+from aloxcam.errors import AloxError
 from aloxcam.imaging.png import write_png
 from aloxcam.settings import SimulationOptions
 from aloxcam.zstage.sim import SimStage
@@ -656,12 +657,14 @@ def test_long_baseline_edge_precision(rig):
     assert 0.0 < report.uncertainty_deg < 0.005                            # 0.5 µm stage repeatability over 20 mm
     assert states(r) == ["Start", "Started", "Move To Pos", "Position OK?", "Measure Tilt (Long Baseline Edge)",
                          "Move To Baseline Pos", "Baseline Position OK?", "Measure Baseline Point",
-                         "Move To Baseline Pos", "Baseline Position OK?", "Measure Baseline Point", "Notify Client",
-                         "Display & Save", "Finished"]
-    assert codes(r) == [301, 302, 303, 304, 310, 312, 313, 310, 312, 313, 310, 309, 400, 500]
+                         "Move To Baseline Pos", "Baseline Position OK?", "Measure Baseline Point", "Return To Start",
+                         "Start Position OK?", "Notify Client", "Display & Save", "Finished"]
+    assert codes(r) == [301, 302, 303, 304, 310, 312, 313, 310, 312, 313, 310, 312, 313, 309, 400, 500]
     [tilt] = ws(r, "measure_tilt")
     assert tilt["Tilt"] == {"Angle": f"{report.angle_deg:.6f}", "Unit": "degrees"}
-    assert r.xy.position() == pytest.approx((51.0 + 10.0 * math.cos(a), 52.03 + 10.0 * math.sin(a)), abs=0.002)
+    # owner S8: the stage goes back to the start position of the walk (the search position), not left at +10 mm
+    assert r.xy.position() == pytest.approx((51.0, 52.0), abs=0.002)
+    assert report.current_xy == pytest.approx((51.0, 52.0), abs=0.002) and b.stage_mm[0] == pytest.approx(report.current_xy, abs=1e-6)
     texts = [s.text for s in r.services.images.overlays["tilt"] if isinstance(s, Text)]
     assert texts == [f"TILT ANGLE: {report.angle_deg:.3f}° ± {report.uncertainty_deg:.3f}°"]
     # the LabVIEW method on the same wafer: one field of view (0.64 mm)
@@ -718,6 +721,28 @@ def test_long_baseline_edge_lost_tries_the_next_search_position(rig):
     seq = states(r)
     assert seq.count("Measure Tilt (Long Baseline Edge)") == 2 and seq[-3:] == ["Display & Save", "Move To Pos",
                                                                               "Error"]
+    # owner S8: a lost walk goes back to its start too, before the next search position
+    assert seq.count("Return To Start") == 2 and seq[-6:-3] == ["Return To Start", "Start Position OK?",
+                                                                "Notify Client"]
+
+
+def test_return_to_start_errors_are_only_logged(rig, monkeypatch):
+    """The walk is done: a refused move back to the start is retried, then logged, and the tilt is still given."""
+    r = rig(flat_scene(0.1))
+    move = r.xy.move_absolute
+    refused: list[tuple[float, float]] = []
+
+    def refuse_home(x: float, y: float, **kwargs: Any) -> Any:
+        if states(r)[-1] == "Return To Start":
+            refused.append((x, y))
+            raise AloxError(9404, "refused")
+        return move(x, y, **kwargs)
+    monkeypatch.setattr(r.xy, "move_absolute", refuse_home)
+    report = run(r, baseline_params(TiltMethod.LONG_BASELINE_EDGE, long_baseline=LongBaselineDetection(
+        length_mm=4.0)))
+    assert report.valid and len(refused) == 4 and "Start Position OK?" not in states(r)     # 3 retries
+    assert refused[0] == pytest.approx((51.0, 52.0), abs=0.002)
+    assert any(level == "warning" and "Return To Start" in text for level, text in r.log.lines)
 
 
 def test_long_baseline_edge_without_edge(rig):
@@ -755,13 +780,73 @@ def test_lattice_precision_with_the_bootstrap_walk(rig):
     assert TiltStatus.MEASURE_LATTICE in r.status.codes and ws(r, "measure_tilt")
 
 
-@pytest.mark.parametrize(("true", "camera", "pitch"), [(-1.3, 0.4, (0.05, 0.05)), (2.2, -0.3, (0.06, 0.04))])
-def test_lattice_rotated_camera_and_rectangular_grid(rig, true, camera, pitch):
-    report = run(rig(grid_scene(true, camera_deg=camera, pitch=pitch)),
-                 baseline_params(TiltMethod.LATTICE, long_baseline=LongBaselineDetection(length_mm=10.0)))
+@pytest.mark.parametrize(("true", "camera", "pitch", "grid"), [(-1.3, 0.4, (0.05, 0.05), 0.0),
+                                                              (2.2, -0.3, (0.06, 0.04), 90.0)])
+def test_lattice_rotated_camera_and_rectangular_grid(rig, true, camera, pitch, grid):
+    """The row is the shortest lattice vector: for the 0.06 × 0.04 mm grid the 0.04 mm one, across the generator's
+    rows (Grid Row Angle 90°); a rectangular grid is symmetric by 180° only, a square one by 90°."""
+    r = rig(grid_scene(true, camera_deg=camera, pitch=pitch))
+    report = run(r, baseline_params(TiltMethod.LATTICE, long_baseline=LongBaselineDetection(
+        length_mm=10.0, lattice_angle_deg=grid)))
     assert report.valid and abs(report.angle_deg - true) < 0.005
-    assert report.baseline is not None
-    assert report.baseline.image_angle_deg == pytest.approx(true - camera, abs=0.05)
+    b = report.baseline
+    assert b is not None and b.image_angle_deg == pytest.approx(true - camera, abs=0.05)
+    assert b.start_fit.kind == ("square" if grid == 0.0 else "rectangular")
+    assert b.fit.angle_deg == pytest.approx(true + grid, abs=0.005)        # the row's own direction
+    assert all(abs(abs(o) / min(pitch) - round(abs(o) / min(pitch))) < 0.01 for o in b.offsets_mm)
+    assert r.xy.position() == pytest.approx((51.0, 52.0), abs=0.002)       # back at the start (S8)
+    if grid:                                                               # without the Grid Row Angle: 90° off
+        with pytest.raises(TiltFailed) as info:
+            run(rig(grid_scene(true, camera_deg=camera, pitch=pitch)),
+                baseline_params(TiltMethod.LATTICE, long_baseline=LongBaselineDetection(length_mm=10.0)))
+        assert info.value.code == TILT_OUT_OF_RANGE
+        assert info.value.report.angle_deg == pytest.approx(true + 90.0 - 180.0, abs=0.005)
+
+
+def lattice_scene(a: tuple[float, float], b: tuple[float, float], *, radius: float = 0.014,
+                  origin: tuple[float, float] = (51.0131, 52.0072), blur_px: float = 0.7, noise: float = 4.0):
+    """Mesas (discs of ``radius`` mm) on the lattice of the stage vectors ``a``, ``b`` (mm, X right, Y up; any type),
+    node (0, 0) at the stage point ``origin``."""
+    ox, oy = _camera_offsets(0.0)
+    basis = np.column_stack((a, b))
+    inverse = np.linalg.inv(basis)
+
+    def render(x: float, y: float, rng: np.random.Generator) -> np.ndarray:
+        p = np.stack((x + ox - origin[0], y + oy - origin[1]), axis=-1)
+        f = np.rint(p @ inverse.T)
+        d = np.full(ox.shape, np.inf)
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                node = (f + np.array([di, dj])) @ basis.T
+                d = np.minimum(d, np.hypot(*(p - node).transpose(2, 0, 1)))
+        return 50.0 + 150.0 / (1.0 + np.exp((d / PX_MM - radius / PX_MM) / blur_px)) + rng.normal(0.0, noise,
+                                                                                               ox.shape)
+    return render
+
+
+def _vec(length: float, angle_deg: float) -> tuple[float, float]:
+    return length * math.cos(math.radians(angle_deg)), length * math.sin(math.radians(angle_deg))
+
+
+@pytest.mark.parametrize(("grid", "between", "lengths", "kind"), [(30.0, 60.0, (0.05, 0.05), "hexagonal"),
+                                                                   (-17.0, 75.0, (0.05, 0.065), "oblique")])
+def test_lattice_hexagonal_and_oblique_grids_at_an_angle_to_the_flat(rig, grid, between, lengths, kind):
+    """Owner S6 "can be everything": a hexagonal grid whose rows are at 30° to the flat, an oblique one at −17°. The
+    walk follows the shortest lattice vector (whole multiples of it), the tilt is the row's angle less the Grid Row
+    Angle, folded to the lattice symmetry (60°, 180°); the stage ends at the start position (S8)."""
+    true = 0.137
+    r = rig(lattice_scene(_vec(lengths[0], grid + true), _vec(lengths[1], grid + true + between)))
+    report = run(r, baseline_params(TiltMethod.LATTICE, long_baseline=LongBaselineDetection(
+        length_mm=10.0, lattice_angle_deg=grid)))
+    assert report.valid and abs(report.angle_deg - true) < 0.005
+    b = report.baseline
+    assert b is not None and b.complete and b.start_fit.kind == kind
+    assert b.start_fit.period_deg == (60.0 if kind == "hexagonal" else 180.0)
+    assert b.fit.angle_deg == pytest.approx(grid + true, abs=0.005) and b.fit.length == pytest.approx(10.0, abs=0.06)
+    assert all(abs(abs(o) / lengths[0] - round(abs(o) / lengths[0])) < 0.01 for o in b.offsets_mm)
+    assert b.image_angle_deg == pytest.approx(true, abs=0.02)
+    assert r.xy.position() == pytest.approx((51.0, 52.0), abs=0.002)
+    assert states(r)[-5:] == ["Return To Start", "Start Position OK?", "Notify Client", "Display & Save", "Finished"]
 
 
 def test_lattice_without_grid(rig):
