@@ -121,3 +121,17 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 | S6 | Are the mesa grid rows designed parallel to the flat? Should Tilt Correction prefer the lattice angle? Any hexagonal grids (not supported)? | rows parallel; rectangular grids | vision/tilt.py |
 | S7 | Is there a mesa-free margin along the flat, and is the flat visible at the tilt start position at Low Mag? | assumed | functions/tilt.py |
 | S8 | After the long-baseline walk, go back to the start position? (today: left at the last baseline position) | left there | functions/tilt.py |
+
+### Round 3 answers (2026-11-26)
+
+| # | Owner's answer | Status |
+|---|---|---|
+| S0 | (not answered yet) | wafer points ZW1, ZW2, ZW3 meanwhile |
+| S1 | "Already in Claude" | Not in the files received (the export's PythonLV folder only has the Hough and correlation scripts): asked again |
+| S2 | Rectangle measure types used: Fit, Surface, vertical y, horizontal x | In progress: measure types HEIGHT_Y and WIDTH_X |
+| S3 | Line: depth only, never median | In progress: measure type DEPTH |
+| S4 | (no answer) | 0–360° kept |
+| S5 | Did not understand the question | Re-explained |
+| S6 | The grid can be anything | In progress: hexagonal and oblique lattices; no assumption of rows parallel to the flat |
+| S7 | "But why?" | Re-explained |
+| S8 | Go back to the start position | In progress |
