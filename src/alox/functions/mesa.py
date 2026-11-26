@@ -453,7 +453,9 @@ class MesaParams:
     def from_request(cls, overrides: Mapping[str, Any], profile: Any) -> MesaParams:
         """The profile parameters with the request's ``x``, ``y`` (Start Position), ``target`` (Oxyd Target),
         ``tilt`` (Tilt Correction), ``singleshot``, ``positionsctrl``, ``analysis`` and ``indexID`` (missing ones keep
-        the profile's). A local single start passes ``{"tilt": False, "singleshot": True}`` (``alox_core_ui d315``)."""
+        the profile's). A local single start passes ``{"tilt": False, "singleshot": True, "positionsctrl": False,
+        "analysis": False}`` (``alox_core_ui d315``): no Move Start / Search Object, the mesa is the one under the
+        camera, where the operator put the stage."""
         extra: dict[str, Any] = {field_: overrides[key] for key, field_ in _REQUEST_KEYS.items()
                                  if overrides.get(key) is not None}
         if overrides.get("x") is not None or overrides.get("y") is not None:

@@ -286,8 +286,8 @@ class ResultsPanel(QWidget):
 
 
 class MesaPanel(ResultsPanel):
-    """MESA MEASUREMENT: OXIDATION GRAPH (the oxide diameter over time and the fitted rate line, the target as a
-    dashed line when in range) and the values."""
+    """MESA MEASUREMENT: OXIDATION GRAPH (the oxide diameter, or depth / side by the report's measure type, over
+    time and the fitted rate line, the target as a dashed line when in range) and the values."""
 
     show_job = True
 
@@ -301,6 +301,7 @@ class MesaPanel(ResultsPanel):
 
     def update_body(self, model: Results) -> None:
         assert isinstance(model, MesaResults)
+        self.chart.y_label = model.value_label()
         series = [Series("OXIDE", model.samples, "points", 0), Series("FIT", model.fit_line(), "line", 1)]
         markers = []
         if model.samples and model.target > 0:

@@ -31,10 +31,11 @@ from alox.ui.results import (
     Validity,
     fmt,
     fmt_duration,
+    oxide_measure_type,
 )
 from alox.vision.circles import Circle
 from alox.vision.edges import DetectedCircle
-from alox.vision.stats import LinearFit
+from alox.vision.stats import LinearFit, OxideMeasureType
 
 JOB = JobInfo("CJ", "PJ-7", "LOT-1", "W-2", "Z-3")
 T0 = 1_764_190_000.0
@@ -48,14 +49,15 @@ def state(name: FunctionName, state_name: str, **data: Any) -> Event:
     return event(name, "state", state=state_name, **data)
 
 
-def mesa_report(n: int, *, fit: bool = True) -> MesaReport:
+def mesa_report(n: int, *, fit: bool = True, measure_type: OxideMeasureType = OxideMeasureType.FIT) -> MesaReport:
     """The report after ``n`` measures of a diameter shrinking by 0.1 µm/min (one measure every 30 s)."""
     samples = tuple((T0 + 30.0 * i, 24.0 - 0.05 * i) for i in range(n))
     slope = -0.1 / 60.0
     line = LinearFit(slope, 24.0 - slope * T0, 0.0, 99.0) if fit else None
     fitted = tuple((t, 24.0 + slope * (t - T0)) for t, _ in samples[-5:]) if fit else ()
     remaining = (samples[-1][1] - 22.5) / 0.1 * 60.0
-    return MesaReport(job=JOB, timestamp=samples[-1][0], external_fit_um=31.5, oxyd=OxydDiameters(fit=samples[-1][1]),
+    return MesaReport(job=JOB, timestamp=samples[-1][0], external_fit_um=31.5, oxyd=OxydDiameters(fit=samples[-1][1],
+                                                                                        measure_type=measure_type),
                       wavelength_nm=850.0, rate_um_per_min=-0.1 if fit else math.nan,
                       remaining_s=remaining if fit else 86400.0,
                       remaining_text=fmt_duration(remaining) if fit else "?", linear_fit=line,
@@ -103,6 +105,31 @@ def test_mesa_points_give_the_rate_line_and_the_remaining_time():
     assert model.outcome == "finished" and model.badge_text() == "FINISHED"
     book.handle(event(FunctionName.MESA_MEASURE, "started"))                # a new run starts empty
     assert model.samples == [] and model.fields()[0][1] == DASH
+
+
+@pytest.mark.parametrize(("kind", "label"), [(OxideMeasureType.DEPTH, "OXIDE DEPTH (µm)"),
+                                             (OxideMeasureType.HEIGHT_Y, "OXIDE HEIGHT Y (µm)"),
+                                             (OxideMeasureType.WIDTH_X, "OXIDE WIDTH X (µm)")])
+def test_mesa_samples_are_labelled_by_the_measure_type(kind: OxideMeasureType, label: str):
+    model = MesaResults(FunctionName.MESA_MEASURE)
+    assert model.value_label() == "OXIDE DIAMETER (µm)" and model.fields()[0][0] == "OXID DIAMETER (µm)"
+    model.on_state({"state": "Measure MESA", "event": "MESA Measured", "report": mesa_report(3, measure_type=kind)})
+    assert model.value_label() == label and model.fields()[0] == (label, "23.900")
+    model.take_result({"timestamp": T0 + 99, "oxyd_diameter_um": 1.0})        # a report without its type: kept
+    assert model.value_label() == label
+    model.reset()                                                         # a new run: a diameter until it says
+    assert model.quantity == "DIAMETER"
+    model.take_result({"timestamp": T0, "oxyd_diameter_um": 20.0, "measure_type": "Height_Y"})   # the report's text
+    assert model.quantity == "HEIGHT Y"
+
+
+def test_oxide_measure_types_are_read_from_the_enum_its_value_or_its_text():
+    assert oxide_measure_type(OxideMeasureType.DEPTH) is OxideMeasureType.DEPTH
+    assert oxide_measure_type(8) is OxideMeasureType.WIDTH_X and oxide_measure_type(2.0) is OxideMeasureType.FIT
+    assert oxide_measure_type("Depth") is OxideMeasureType.DEPTH and oxide_measure_type("fitted") is OxideMeasureType.FIT
+    assert oxide_measure_type("average") is OxideMeasureType.MEAN
+    assert oxide_measure_type(None) is None and oxide_measure_type(42) is None and oxide_measure_type("x") is None
+    assert oxide_measure_type(True) is None
 
 
 def test_mesa_without_rate_shows_unknown_and_points_without_samples_accumulate():

@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import math
 import zipfile
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 
 from alox.config import TypedIni
-from alox.devices.scene import DEMO_FOLDER, Mark, Scene, SceneCameraBackend, SceneParams, make_demo
+from alox.devices.scene import (
+    DEMO_FOLDER,
+    Mark,
+    Scene,
+    SceneCameraBackend,
+    SceneParams,
+    make_demo,
+    place_stage,
+)
 from alox.vision.focus import fin_roi, measure
 from alox.vision.wafer import tracking_move
 from aloxcam.camera.backend import ValueType
@@ -172,6 +181,28 @@ def test_params_from_the_settings():
     assert p.seed == 3 and p.image_width == 612 and p.mesa_diameter_um == 30.0
     assert p.marks == (Mark("cross", -0.5, 0.0), Mark("corner", 0.5, 0.0))
     assert SceneParams.from_settings(None) == SceneParams()
+    assert (p.stage_start_x_mm, p.stage_start_y_mm) == (0.0, 0.0)              # the demo starts on the centre mesa
+    demo = Scene(p, settings=ini)
+    assert demo.stage_start() == pytest.approx((100.0, 100.0))                  # the wafer origin of the demo
+    assert demo.mesa_near(*demo.stage_to_wafer(*demo.stage_start())) == pytest.approx((0.0, 0.0))
+    assert Scene(SceneParams()).stage_start() is None                           # default: left where it referenced
+
+
+def test_place_stage_moves_the_simulated_stage_to_the_start_position():
+    class XY:
+        state, moves = "ready", []
+
+        def move_absolute(self, **kwargs):
+            self.moves.append(kwargs)
+
+    ini = TypedIni.load(DEMO_FOLDER / "alox_default.ini")
+    xy = XY()
+    app = SimpleNamespace(scene=Scene(SceneParams.from_settings(ini), settings=ini), devices={"xy": xy})
+    assert place_stage(app) == pytest.approx((100.0, 100.0))
+    assert xy.moves == [{"x": 100.0, "y": 100.0, "wait": True, "timeout": 30.0}]
+    assert place_stage(SimpleNamespace(scene=Scene(SceneParams()), devices={"xy": xy})) is None    # no start position
+    xy.state = "fault"
+    assert place_stage(app) is None and len(xy.moves) == 1                     # the stage is not ready
 
 
 # ================================================================================================== cameras

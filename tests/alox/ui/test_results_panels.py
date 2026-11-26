@@ -29,6 +29,7 @@ from alox.ui.results_panels import (
     TiltPanel,
 )
 from alox.ui.window import MainWindow
+from alox.vision.stats import OxideMeasureType
 
 JOB = JobInfo("CJ", "PJ-7", "LOT-1", "W-2", "Z-3")
 T0 = 1_764_190_000.0
@@ -46,11 +47,11 @@ def state(name: FunctionName, state_name: str, **data: Any) -> Event:
     return Event(f"function.{name.topic}.state", "core", {"job": JOB, "state": state_name, **data})
 
 
-def mesa_events(n: int) -> list[Event]:
+def mesa_events(n: int, **extra: Any) -> list[Event]:
     events = [Event("function.mesa_measure.started", "core", {"job": JOB})]
     for k in range(1, n + 1):
         samples = tuple((T0 + 30.0 * i, 24.0 - 0.05 * i) for i in range(k))
-        report = {"timestamp": samples[-1][0], "oxyd_diameter_um": samples[-1][1], "samples": samples,
+        report = {**extra, "timestamp": samples[-1][0], "oxyd_diameter_um": samples[-1][1], "samples": samples,
                   "fitted": samples[-4:], "linear_fit": {"slope": -0.05 / 30, "intercept": 24.0 + 0.05 / 30 * T0},
                   "rate_um_per_min": -0.1, "remaining_s": 570.0, "remaining_text": "00:09:30",
                   "external_fit_um": 31.5, "oxyd_target_um": 22.5, "wavelength_nm": 850.0,
@@ -98,6 +99,15 @@ def test_the_mesa_panel_shows_points_rate_and_remaining_time(qapp: QApplication)
     assert len(series["OXIDE"].points) == 24 and len(series["FIT"].points) == 2
     assert [m.y for m in panel.chart.markers] == [22.5]                   # the target is close: drawn
     assert panel.state.text() == "Measure MESA"
+    assert panel.chart.y_label == "OXIDE DIAMETER (µm)" and panel.fields.text("OXID DIAMETER (µm)") == "22.850"
+    panel.grab()
+
+
+def test_the_mesa_panel_labels_the_samples_by_the_measure_type(qapp: QApplication):
+    page, _book = page_with(HIGH, mesa_events(3, oxyd={"measure_type": OxideMeasureType.DEPTH}))
+    panel = page.panel
+    assert isinstance(panel, MesaPanel)
+    assert panel.chart.y_label == "OXIDE DEPTH (µm)" and panel.fields.text("OXIDE DEPTH (µm)") == "23.900"
     panel.grab()
 
 

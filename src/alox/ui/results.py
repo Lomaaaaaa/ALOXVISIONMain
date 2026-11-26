@@ -28,6 +28,7 @@ from typing import Any
 from alox.core.functions import FunctionName
 from alox.functions.bowing import POINT_FIELDS
 from alox.functions.bowing import progress as bowing_progress
+from alox.vision.stats import OxideMeasureType
 from alox.vision.wafer import BOWING_ROWS
 
 __all__ = [
@@ -228,8 +229,30 @@ class Results:
 
 
 # ================================================================================================== high level
+#: What the mesa samples are, by the report's measure type (``report.oxyd.measure_type``): the oxidised depth per
+#: side of a Line mesa, a side of a Rectangle aperture (owner S2 / S3); a diameter for the LabVIEW types.
+_OXIDE_QUANTITIES: Mapping[OxideMeasureType, str] = {
+    OxideMeasureType.DEPTH: "DEPTH", OxideMeasureType.HEIGHT_Y: "HEIGHT Y", OxideMeasureType.WIDTH_X: "WIDTH X"}
+
+
+def oxide_measure_type(value: Any) -> OxideMeasureType | None:
+    """A measure type as a report carries it: the enum, its value, or its name / ``Type_Measure_Rate`` text
+    (``"Depth"``, ``"Height_Y"``, ``"fitted"``…); None when missing or unknown."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        try:
+            return OxideMeasureType(int(value))
+        except ValueError:
+            return None
+    text = str(value).strip().upper().replace(" ", "_")
+    aliases = {"AVERAGE": "MEAN", "FITTED": "FIT"}
+    return OxideMeasureType.__members__.get(aliases.get(text, text))
+
+
 class MesaResults(Results):
-    """MESA MEASUREMENT: the oxide diameter over time (``samples``), the fit window's line, the rate (µm/min), the
+    """MESA MEASUREMENT: the oxide diameter over time (``samples``; the depth or the side of the aperture for the
+    measure types DEPTH, HEIGHT_Y, WIDTH_X: :attr:`quantity`), the fit window's line, the rate (µm/min), the
     remaining time to the target, the external (mesa) diameter, the wavelength and the position."""
 
     title = "MESA MEASUREMENT"
@@ -250,6 +273,7 @@ class MesaResults(Results):
         self.found: bool | None = None
         self.rate_error: int | None = None
         self.timestamp = math.nan
+        self.measure_type: OxideMeasureType | None = None
 
     def take(self, data: Mapping[str, Any]) -> None:
         report = data.get("report")
@@ -261,6 +285,9 @@ class MesaResults(Results):
             return
         self.timestamp = num(get(report, "timestamp"))
         self.oxyd = num(get(report, "oxyd_diameter_um"))
+        kind = oxide_measure_type(get(report, "measure_type", get(get(report, "oxyd"), "measure_type")))
+        if kind is not None:
+            self.measure_type = kind
         samples = _points(get(report, "samples", ()))
         if samples:
             self.samples = samples
@@ -284,6 +311,15 @@ class MesaResults(Results):
         self.rate_error = None if error is None else int(error)
 
     # ---------------------------------------------------------------------------------------------- chart data
+    @property
+    def quantity(self) -> str:
+        """What the samples are: ``DIAMETER``, ``DEPTH``, ``HEIGHT Y`` or ``WIDTH X`` (the report's measure type)."""
+        return _OXIDE_QUANTITIES.get(self.measure_type, "DIAMETER") if self.measure_type is not None else "DIAMETER"
+
+    def value_label(self) -> str:
+        """The chart's axis and the value's caption: ``OXIDE DEPTH (µm)``…, ``OXIDE DIAMETER (µm)``."""
+        return f"OXIDE {self.quantity} (µm)"
+
     def fit_line(self) -> list[tuple[float, float]]:
         """The rate line over the fit window (its two ends), else over the samples; [] without a fit."""
         xs = [t for t, _ in self.fitted] or [t for t, _ in self.samples]
@@ -313,7 +349,8 @@ class MesaResults(Results):
 
     def fields(self) -> list[tuple[str, str]]:
         """The value fields of the panel (caption, text)."""
-        return [("OXID DIAMETER (µm)", fmt(self.oxyd, 3)), ("MESA DIAMETER (µm)", fmt(self.external, 3)),
+        oxyd = "OXID DIAMETER (µm)" if self.quantity == "DIAMETER" else self.value_label()    # LabVIEW's caption
+        return [(oxyd, fmt(self.oxyd, 3)), ("MESA DIAMETER (µm)", fmt(self.external, 3)),
                 ("OXID RATE (µm/min)", self.rate_text()), ("REMAINING TIME", self.remaining_text()),
                 ("TARGET (µm)", fmt(self.target, 3) if num(self.target) > 0 else DASH),
                 ("WAVELENGTH (nm)", fmt(self.wavelength, 0)), ("MEASURES", str(len(self.samples))),

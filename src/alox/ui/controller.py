@@ -24,8 +24,10 @@ Starts (observed: ``alox_core_ui d166, d171, d186, d203, d216, d285, d315, d320,
   ``Measure <X>`` on the command bus with a :class:`alox.core.core.MeasureRequest` (the core sets the statuses and
   starts the function; the high-level function bundles the profile parameters itself). Overrides (keys of the REST
   API): Mesa single ``tilt=F, singleshot=T, positionsctrl=F, analysis=F``; Mesa continuous the same with
-  ``singleshot=F``; Tilt ``x``, ``y`` = the current XY position in wafer coordinates ("Start Search Pos"); Bowing
-  none. The SEMI job of a local start is empty (``alox_manager_semi`` is not ported).
+  ``singleshot=F`` (without ``positionsctrl`` the state machine starts with the large autofocus where the stage
+  stands: the operator puts a mesa under the camera first); Tilt ``x``, ``y`` = the current XY position in wafer
+  coordinates ("Start Search Pos"); Bowing none. The SEMI job of a local start is empty (``alox_manager_semi`` is not
+  ported).
 
 Status indicators (``alox_manager_functions_status d25..d32``): text ``alox_<lang>.lang`` 000039..000043 (OFF, OFF
 OK, RUNNING, FINISHED, ERROR), black text on: Off ``#FF9900``, Off Cond OK transparent (LabVIEW colour "T": the

@@ -248,7 +248,8 @@ class Application:
         return load_alox_ini(path, CameraOptions(), warn=lambda message: log.warning("alox.ini: %s", message))
 
     def start(self) -> dict[str, str]:
-        """Open every device (with the core: its init cycle, then the API servers); returns ``{device: state}``."""
+        """Open every device (with the core: its init cycle, then the API servers); in simulation, put the XY stage
+        at the scene's start position (:func:`alox.devices.scene.place_stage`); returns ``{device: state}``."""
         if self.core is None:
             for device in self.devices.values():
                 self._open_device(device)
@@ -256,6 +257,10 @@ class Application:
             if self.config.api:
                 self._start_api()
             self.core.start(self._open_device)
+        if self.scene is not None:                    # simulation: the stage to the scene's start position
+            from alox.devices.scene import place_stage
+            place_stage(self)
+        if self.core is not None:
             self._start_live_view()
         return {name: str(device.state) for name, device in self.devices.items()}
 

@@ -42,8 +42,18 @@ gain, aperture to 10 nm), otherwise only the noise is new. Deterministic for a g
     alox --simulate --setup-ini /tmp/alox-demo/alox_setup.ini     # REST 8002, websocket 6123 (add --ui for the window)
 
 then post the supervisor jobs (``PUT /alox/v1/functions/measuretilt``, ``measuremesa?singleshot=true``,
-``measurebowing``; the XY stage starts on the chuck at (0, 0), the jobs move it). What a run gives (``tests/alox/
-test_simulation_jobs.py`` checks it):
+``measurebowing``; the jobs move the stage), or use the window's buttons (``--ui``; the demo's operator has every
+right). The application puts the XY stage on the mesa at the wafer centre once started (``[simulation.scene]
+stage_start_x_mm`` / ``stage_start_y_mm``, :func:`place_stage`): the window's SINGLESHOT / CONTINUOUS MEASURE is
+LabVIEW's local start (no tilt correction, no position control: no Move Start, no Search Object), which measures the
+mesa under the camera, so the operator first puts a mesa there (MOVE X / MOVE Y in wafer mm: the mesas are on the
+0.25 mm grid rotated by the tilt, away from the marks; the tracking centres it). The demo's ``measure.mesa.refocustime``
+(1 s) is shorter than the Low Mag large autofocus of a local start, so that the High Mag refocus follows it (Start
+resets the refocus clock; the Low Mag autofocus alone leaves the High Mag a few µm out of focus). What a run gives
+(``tests/alox/test_simulation_jobs.py`` checks it):
+
+- operator SINGLESHOT on the wafer-centre mesa (Low Mag autofocus, High Mag refocus, Detect Circle, tracking, Search
+  Wavelength, three Measure Oxyd): as the mesa job below, 6 s (10 s for the first, with the Z move);
 
 - tilt (straight edge on the flat, Low Mag autofocus): ≈ 0.30° (the scene's ``tilt_deg``), 6 s;
 - mesa, Singleshot with the tilt correction (Move Start to the cross at (−0.5, 0) mm, Search Object with the Low Mag
@@ -60,6 +70,7 @@ test_simulation_jobs.py`` checks it):
 from __future__ import annotations
 
 import argparse
+import logging
 import math
 import shutil
 import sys
@@ -83,7 +94,10 @@ __all__ = [
     "SceneCameraBackend",
     "SceneParams",
     "make_demo",
+    "place_stage",
 ]
+
+log = logging.getLogger(__name__)
 
 CAMERAS = ("highmag", "lowmag")
 #: The demo settings and recipe.
@@ -156,6 +170,10 @@ class SceneParams:
     oxidation_start_s: float = 0.0           # wall clock (s since the epoch); 0: when the scene is created
     # alignment marks (design mm); mesas are left out around them
     marks: tuple[Mark, ...] = (Mark("cross", -0.5, 0.0), Mark("corner", 0.5, 0.0))
+    # where the application puts the simulated XY stage once started (wafer mm, :func:`place_stage`); None: left where
+    # it referenced (stage (0, 0), on the chuck)
+    stage_start_x_mm: float | None = None
+    stage_start_y_mm: float | None = None
     # heights (Z stage mm at best focus)
     z_focus_mm: float = 12.6                 # wafer centre
     bowing_um: float = 20.0                  # paraboloid: + bowing·(r/R)² µm
@@ -335,6 +353,13 @@ class Scene:
         return size * 1000.0 if units in ("2", "mm") else size
 
     # ---------------------------------------------------------------------------------------------- geometry
+    def stage_start(self) -> tuple[float, float] | None:
+        """The stage position (mm) of :attr:`SceneParams.stage_start_x_mm` / ``_y_mm``, None when not set."""
+        p = self.params
+        if p.stage_start_x_mm is None or p.stage_start_y_mm is None:
+            return None
+        return self.wafer_to_stage(p.stage_start_x_mm, p.stage_start_y_mm)
+
     def stage_to_wafer(self, x: float, y: float) -> tuple[float, float]:
         return stage_to_wafer(x, y, self.origin(), self.coordinate_system())
 
@@ -715,6 +740,24 @@ class SceneCameraBackend(SimCameraBackend):
         app.events.on(("device",), scene.on_event)
         s = app.settings
         return cls(scene, {s.high_mag.camera_name: "highmag", s.low_mag.camera_name: "lowmag"})
+
+
+def place_stage(app: Any, timeout: float = 30.0) -> tuple[float, float] | None:
+    """Move the XY stage of an :class:`alox.app.Application` in simulation to the scene's start position (both axes
+    at once, waited for), when the scene has one and the stage is ready; returns the stage position, else None. The
+    demo starts on the mesa at the wafer centre: a local (operator) mesa start measures the mesa under the camera
+    (no Move Start, no Search Object), and the window's one-axis MOVE X / MOVE Y can reach the wafer from there (from
+    the chuck at stage (0, 0) each one-axis destination is more than the move radius from the wafer origin: 9404)."""
+    scene, xy = getattr(app, "scene", None), getattr(app, "devices", {}).get("xy")
+    start = scene.stage_start() if scene is not None else None
+    if start is None or xy is None or str(xy.state) != "ready":
+        return None
+    try:
+        xy.move_absolute(x=start[0], y=start[1], wait=True, timeout=timeout)
+    except Exception as exc:                                 # noqa: BLE001 - the simulation goes on where it is
+        log.warning("simulation: XY stage not moved to the scene's start position %s: %s", start, exc)
+        return None
+    return start
 
 
 # ================================================================================================== demo
