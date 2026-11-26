@@ -30,6 +30,8 @@ def build_services(core: Any, images: Any = None) -> Services:
                               "exposures": core.exposures, "folders": core.folders, "publish": core.events.publish,
                               "log": core.log,
                               "statuses": {m.name.lower(): holder for m, holder in getattr(core, "measures", {}).items()}}
+    if hasattr(core, "tilt"):
+        kwargs["tilt"] = core.tilt
     sink = images if images is not None else getattr(core, "images", None)
     if sink is not None and hasattr(sink, "put"):
         kwargs["images"] = sink
@@ -62,6 +64,19 @@ def _by_name(module: str, cls: str) -> Callable[[Services], MeasurementFunction]
     return build
 
 
+def _search_wavelength(services: Services) -> MeasurementFunction:
+    from alox.functions.mesa import locate_mesa
+    from alox.functions.search_wavelength import SearchWavelength
+
+    return SearchWavelength(services, locate=locate_mesa)       # the mesa is re-detected at each wavelength
+
+
+def _mesa(services: Services) -> MeasurementFunction:
+    from alox.functions.mesa import MesaMeasurement
+
+    return MesaMeasurement(services, tilt=services.tilt)        # Tilt Correction uses the last measured tilt
+
+
 #: How each function is built, in LabVIEW's init order where known.
 FACTORIES: dict[FunctionName, Callable[[Services], MeasurementFunction]] = {
     FunctionName.GET_IMAGE: _by_name("alox.functions.get_image", "GetImage"),
@@ -73,8 +88,8 @@ FACTORIES: dict[FunctionName, Callable[[Services], MeasurementFunction]] = {
     FunctionName.SEARCH_OBJECT: _by_name("alox.functions.search_object", "SearchObject"),
     FunctionName.TRACKING: _by_name("alox.functions.tracking", "Tracking"),
     FunctionName.AUTO_EXPOSURE: _by_name("alox.functions.auto_exposure", "AutoExposure"),
-    FunctionName.SEARCH_WAVELENGTH: _by_name("alox.functions.search_wavelength", "SearchWavelength"),
-    FunctionName.MESA_MEASURE: _by_name("alox.functions.mesa", "MesaMeasurement"),
+    FunctionName.SEARCH_WAVELENGTH: _search_wavelength,
+    FunctionName.MESA_MEASURE: _mesa,
     FunctionName.TILT_MEASURE: _by_name("alox.functions.tilt", "TiltMeasurement"),
     FunctionName.BOWING_MEASURE: _by_name("alox.functions.bowing", "BowingMeasurement"),
 }

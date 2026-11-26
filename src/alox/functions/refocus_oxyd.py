@@ -16,8 +16,9 @@ as a thick circle of 5), ``d84`` (``Stopped``); ``alox_function_II_refocus_filte
 The Z scan is the camera-server refocus, now in-process: :class:`alox.functions.focus.Refocus` (positions, moves,
 settle, joystick, best-Z move, speed restore, refocus PNGs) is run with the ``Camera Refocus Data`` LabVIEW builds; its
 metric runs on the Oxyd ROI (:class:`_OxydRoiMetrics`). ``Circle In`` (:attr:`RefocusOxydParams.circle`) is the circle
-of Detect Circle (:attr:`alox.functions.detect_circle.DetectCircleReport.best_circle`). No HL function of V1.2.6.2
-calls this function (the HL mesa uses the plain Refocus); it is started from the UI or the API.
+of Detect Circle (:attr:`alox.functions.detect_circle.DetectCircleReport.best_circle`). The HL mesa runs it on the
+detected circle once a circle has been detected (status 411; plain Refocus before, 408: ``alox.functions.mesa``); it is
+also started from the UI.
 
 Reproduced (LabVIEW): states and transitions, params and profile keys with their defaults; 9037 for an all-zero
 ``Circle In``; 9030 when the Z stage or the camera is not ready; the joystick warning 009036 → ``Error``; the Z speed

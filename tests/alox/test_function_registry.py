@@ -53,3 +53,18 @@ def test_services_of_a_core_carry_the_measure_statuses(tmp_path):
     assert sorted(services.statuses) == ["bowing", "mesa", "tilt"]
     services.set_status("mesa", 404)
     assert core.measures[next(m for m in core.measures if m.name == "MESA")].code == 404
+
+
+def test_the_mesa_gets_the_core_tilt_and_search_wavelength_the_mesa_hook():
+    from alox.functions.mesa import locate_mesa
+
+    runner = FunctionRunner()
+    devices = {"z": object(), "highmag": object(), "wl": object(), "xy": object()}
+    outcome = register_functions(runner, Services(devices=devices, tilt=lambda: 0.75))
+    assert outcome[FunctionName.MESA_MEASURE] == "registered"
+    mesa = runner.function(FunctionName.MESA_MEASURE)
+    assert any(getattr(mesa, name, None) is not None and callable(getattr(mesa, name)) and getattr(mesa, name)() == 0.75
+               for name in ("tilt", "_tilt"))
+    if outcome[FunctionName.SEARCH_WAVELENGTH] == "registered":
+        wavelength = runner.function(FunctionName.SEARCH_WAVELENGTH)
+        assert locate_mesa in (getattr(wavelength, "locate", None), getattr(wavelength, "_locate", None))

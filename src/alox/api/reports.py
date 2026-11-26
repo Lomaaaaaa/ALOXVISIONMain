@@ -12,6 +12,7 @@ One deliberate difference (owner's decision, map §3.1): the bowing payload uses
 from __future__ import annotations
 
 import base64
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -25,7 +26,14 @@ SOURCE = "core"
 
 
 def _f(value: float) -> str:
-    return f"{float(value):f}"
+    """LabVIEW ``%f``: 6 decimals; NaN and infinities as LabVIEW writes them (``NaN``, ``Inf``, ``-Inf``), not
+    Python's ``nan``/``inf``."""
+    number = float(value)
+    if math.isnan(number):
+        return "NaN"
+    if math.isinf(number):
+        return "Inf" if number > 0 else "-Inf"
+    return f"{number:f}"
 
 
 def _event(name: str, data: dict[str, Any]) -> Event:

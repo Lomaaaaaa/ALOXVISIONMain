@@ -172,6 +172,7 @@ class Services:
     publish: Publish | None = None
     log: Any = None
     statuses: Mapping[str, Any] = field(default_factory=dict)
+    tilt: Callable[[], float] = lambda: 0.0      # the core's measured tilt (degrees), for the mesa Tilt Correction
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
 

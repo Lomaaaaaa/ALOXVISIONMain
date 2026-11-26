@@ -414,6 +414,10 @@ class Core:
             self.log.info(f"function '{report}' starts")
         status.set(200)
         self.system.set(SystemCode.STARTING)
+        if request.measure is Measure.MESA:                  # consumer d451: globals LAUNCH FROM HMI AE / WL = F
+            from alox.functions.mesa import GLOBALS
+
+            GLOBALS.launch_from_hmi_ae = GLOBALS.launch_from_hmi_wl = False
         try:
             self.functions.start(function, request, job=request.job)
         except (FunctionBusy, KeyError) as exc:

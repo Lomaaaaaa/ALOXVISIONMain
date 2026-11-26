@@ -305,3 +305,11 @@ def test_websocket_server_pushes_events_to_one_client():
                 assert info.value.rcvd is not None and info.value.rcvd.code == 1013
     finally:
         server.stop()
+
+
+def test_numbers_are_formatted_as_labview_including_nan():
+    """LabVIEW ``%f`` writes NaN and infinities as ``NaN`` / ``Inf`` / ``-Inf`` (an unmeasured diameter, no rate)."""
+    event = reports.tilt_event(None, float("nan"))
+    assert event.data["Tilt"]["Angle"] == "NaN"
+    assert reports.tilt_event(None, float("-inf")).data["Tilt"]["Angle"] == "-Inf"
+    assert reports.tilt_event(None, 1.5).data["Tilt"]["Angle"] == "1.500000"
