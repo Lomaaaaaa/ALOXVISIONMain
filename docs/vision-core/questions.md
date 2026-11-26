@@ -93,9 +93,9 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 |---|---|---|
 | R1 | Build the Fast bowing: measure 3 points, compute the bowing from them | Done: ZW2, ZW3, ZW1 → Bowing A, then Finished (confirm "zc1 2 3" meant these wafer points) |
 | R7 | Remove the monochromator check from Search Object and all Low Mag functions | Done |
-| R8 | Blobs not used any more; Shape and Image (object learning, in Python); mesa shapes Line, Rectangle and Circular all used | To do: remove Blobs, implement Line and Rectangle in Measure Oxyd (agent stopped before writing) |
+| R8 | Blobs not used any more; Shape and Image (object learning, in Python); mesa shapes Line, Rectangle and Circular all used | Done: Blobs removed (old recipes run Shape), Line and Rectangle measured, object learning with rotation |
 | R9 | Refocus Oxyd never worked well; keep the mechanism | Kept |
-| R10 | `measure.vcsel.maxMesaDiam` default 40 | To do with R8 |
+| R10 | `measure.vcsel.maxMesaDiam` default 40 | Done |
 | R11 | As the diagram | Kept |
 | R12 | (0, 0) plus a second measure is enough; to be rebuilt later | Kept |
 | R13 | A recipe always has a wavelength table | Kept |
@@ -108,3 +108,12 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 | R25 | Save tilt images at every attempt | Kept |
 | T3, T5 | The thermal tool will be built differently later | No more work on it for now |
 | T4 | Export the 3D map and also display it in the software | To do with the thermal panel |
+
+### Round 3 (to ask, from the Line/Rectangle work)
+
+| # | Question | Default meanwhile | Source |
+|---|---|---|---|
+| S1 | Rectangle mesas: LabVIEW ran an external `mesure_edges.py` (not in the export). Can you send it, or confirm the definitions used (area, equivalent and mean radial diameters, minimum-area rectangle)? | native equivalent | functions/measure_oxyd.py |
+| S2 | Rectangle: LabVIEW's Mean is 0, so the default measure type gives nothing. Which Oxyd Measure Type do you use for Rectangle (Fit = equivalent diameter, Surface = height)? | as LabVIEW | functions/measure_oxyd.py |
+| S3 | Line: is Median = oxidised depth per side what you use, and which measure type? | as LabVIEW | functions/measure_oxyd.py |
+| S4 | Object learning searches 0–360° (≈1.4 s on a full image): acceptable, or recommend a downsampling? | 0–360° | functions/detect_circle.py |
