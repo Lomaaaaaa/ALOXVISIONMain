@@ -53,7 +53,10 @@ The wafer point is converted to stage coordinates as ``alox_manager_xy_coordinat
   waited); on an error the move is sent again, up to 3 attempts ("Retry 3 times if error"), then status 1002 + i and
   ``Error``; on success the row ``[x, y, NaN]`` (wafer mm) is stored and the next state is ``Wait Pos Zi``. The chuck
   points take at least 250 ms (a parallel wait). With the Fast method, ZC3, ZC1, ZW4, ZC4, ZW5 and ZC5 are skipped
-  (row stored with NaN, no move). ``i`` ≥ 9 is the ``Default`` case: ``Error`` (status unchanged);
+  (row stored with NaN, no move). ``i`` ≥ 9 is the ``Default`` case: ``Error`` (status unchanged). Owner's decision
+  R1: the Fast method was never finished in LabVIEW (it always reached that ``Default`` case); here it ends after
+  ZW1 (the third measured point): Bowing A from ZW1, ZW2, ZW3, then ``Finished`` (or ``Error`` when out of range);
+  Bowing B and the parallelism are not measured (NaN, the parallelism counts as valid);
 - ``Wait Pos Zi`` (sm d85): status 212 + i; ``Get Position XY`` until both axes are within ±0.01 mm of the target
   (read errors: keep waiting), then 100 ms "make sure the stages has stopped moving" and ``Autofocus Large``; 30 s
   after the move: status 1002 + i and ``Error``;
@@ -193,6 +196,7 @@ CHUCK_ROWS = frozenset({2, 4, 6, 8})
 FAST_SKIPPED_ROWS = frozenset({2, 4, 5, 6, 7, 8})
 NO_WAIT_ROWS = frozenset({4, 6, 8})            # LabVIEW: Move to Pos Zi → Autofocus Large (sm d49, d63, d77)
 AXIS_A_ROW = 4                                  # ZC1 stored: Bowing A, Parallelism A (sm d94)
+FAST_LAST_ROW = 3                               # Fast method (owner R1): ZW2, ZW3, ZW1 measured, then Bowing A
 LAST_ROW = len(BOWING_ROWS) - 1
 #: ``Chuck Calibration``: the wafer centre point (sm d25 case True).
 CALIBRATION_CENTRE = (2.0, 2.0)
@@ -880,6 +884,20 @@ class _BowingJob:
         z = self.z_values()
         changes: dict[str, Any] = {POINT_FIELDS[k]: z[k] for k in range(i + 1)}
         nxt = BowState.MOVE_TO_POS
+        if self.p.fast_method and i == FAST_LAST_ROW:               # owner R1: the Fast method ends here
+            r = self.compute(z)
+            changes.update(bowing_a_um=r.bow_a_um, bowing_valid_a=r.bow_valid_a, bowing_valid=r.bow_valid_a,
+                           parallelism_valid=True)                  # parallelism not measured: NaN, not an error
+            self.measured = True
+            self.values = replace(self.values, **changes)
+            self.display()
+            nxt = BowState.FINISHED if self.values.bowing_valid or self.p.chuck_calibration else BowState.ERROR
+            if nxt is BowState.ERROR:
+                self.error = self.validity_error()
+                self.failed_state = str(BowState.MEASURE_BOWING)
+            self.event("BOW Measured", values=self.values, measured=i + 1, progress=100.0)
+            self.save_image(i)
+            return nxt
         if i == AXIS_A_ROW:                                         # case 5 "Zchuck1": axis A
             r = self.compute(z)
             changes.update(bowing_a_um=r.bow_a_um, parallelism_a_um=r.para_a_um, bowing_valid_a=r.bow_valid_a,

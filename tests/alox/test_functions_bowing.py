@@ -479,14 +479,18 @@ def test_low_mag_bowing_needs_no_monochromator(rig: Callable[..., SimpleNamespac
     assert 1001 not in statuses(r) and r.af.calls
 
 
-def test_fast_method_ends_in_the_default_case(rig: Callable[..., SimpleNamespace]) -> None:
+def test_fast_method_measures_axis_a_only(rig: Callable[..., SimpleNamespace]) -> None:
+    """Owner R1: ZW2, ZW3, ZW1 measured, Bowing A computed, then Finished (LabVIEW never finished it)."""
     r = rig(profile={"measure.bowing.methodFast": True})
-    with pytest.raises(BowingFailed) as err:
-        r.bowing.run(None, r.ctx)
-    assert len(r.af.calls) == 3 and err.value.status == 211 and err.value.code == 9001
-    z = [row[2] for row in err.value.report.z_measures]
-    assert [math.isfinite(v) for v in z] == [True, True, False, True, False, False, False, False, False]
-    assert not ws(r, "measure_bowing")
+    report = r.bowing.run(None, r.ctx)
+    assert len(r.af.calls) == 3
+    z = [row[2] for row in report.z_measures]
+    assert [math.isfinite(v) for v in z] == [True, True, False, True]       # ZW2, ZW3, (ZC3 skipped), ZW1
+    v = report.values
+    assert math.isfinite(v.bowing_a_um) and math.isnan(v.bowing_b_um) and math.isnan(v.parallelism_a_um)
+    assert report.valid and report.fast_method
+    event = ws(r, "measure_bowing")
+    assert event and event[-1].data["Bowing"]["bowingb"] == "NaN"
 
 
 def test_invalid_parameters_touch_nothing(rig: Callable[..., SimpleNamespace]) -> None:
