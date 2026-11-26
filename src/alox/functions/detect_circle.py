@@ -45,6 +45,8 @@ Fixed (internal defects, or behaviour that cannot be kept):
   lack of an equivalent (:mod:`alox.vision.edges`).
 - The image comes from the caller or the image store; a missing image is error 9015 at ``Start`` (LabVIEW ran on an
   empty image).
+- ``Shape`` (:func:`alox.vision.edges.detect_circles`) reports one circle per centre (the radius with the most edge
+  pixels): of two concentric circles in the radius range (mesa and oxide aperture) only the stronger is listed.
 """
 
 from __future__ import annotations

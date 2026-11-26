@@ -533,7 +533,8 @@ def fill_holes(mask: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class Particle:
-    """A particle: area (px), centroid, perimeter (crack length × π/4) and Heywood circularity factor."""
+    """A particle: area (px), centroid, perimeter (px) and Heywood circularity factor (perimeter / circumference of
+    the disc of the same area)."""
 
     label: int
     area: float
@@ -543,23 +544,44 @@ class Particle:
     heywood: float
 
 
+def _perimeter(boundary_x: np.ndarray, boundary_y: np.ndarray, cx: float, cy: float) -> float:
+    """The outline as a radial profile around the centroid: the boundary pixels are grouped in angle sectors (about
+    two pixels each), each sector gives its mean angle and its mean distance + 0.5 px (pixel centre → pixel edge);
+    the perimeter is the length of that closed polygon."""
+    n = boundary_x.size
+    if n < 3:
+        return math.pi
+    angle = np.arctan2(boundary_y - cy, boundary_x - cx)
+    radius = np.hypot(boundary_x - cx, boundary_y - cy) + 0.5
+    bins = max(8, n // 2)
+    sector = np.minimum(((angle + math.pi) / (2 * math.pi) * bins).astype(np.int64), bins - 1)
+    count = np.bincount(sector, minlength=bins)
+    used = count > 0
+    sx = np.bincount(sector, weights=np.cos(angle), minlength=bins)[used]
+    sy = np.bincount(sector, weights=np.sin(angle), minlength=bins)[used]
+    r = (np.bincount(sector, weights=radius, minlength=bins) / np.maximum(count, 1))[used]
+    a = np.arctan2(sy, sx)
+    x, y = r * np.cos(a), r * np.sin(a)
+    return float(np.hypot(np.diff(x, append=x[0]), np.diff(y, append=y[0])).sum())
+
+
 def particles(mask: np.ndarray) -> list[Particle]:
-    """The 8-connected particles of a binary image."""
+    """The 8-connected particles of a binary image. The perimeter is that of the outline seen as a radial profile
+    around the centroid (:func:`_perimeter`): close to the true one for star-shaped particles (discs, rectangles),
+    shorter for the others (NI traces the contour; not reproduced)."""
     labels, count = ndimage.label(mask, structure=np.ones((3, 3)))
     if count == 0:
         return []
-    padded = np.pad(labels, 1)
-    cracks = np.zeros(count + 1)
-    for a, b in ((padded[1:, :], padded[:-1, :]), (padded[:, 1:], padded[:, :-1])):
-        diff = a != b
-        np.add.at(cracks, a[diff], 1)
-        np.add.at(cracks, b[diff], 1)
+    boundary = labels * (mask & ~ndimage.binary_erosion(mask, structure=np.ones((3, 3)), border_value=0))
     index = np.arange(1, count + 1)
     areas = ndimage.sum_labels(np.ones_like(labels), labels, index)
     centres = ndimage.center_of_mass(np.ones_like(labels), labels, index)
+    by, bx = np.nonzero(boundary)
+    bl = boundary[by, bx]
     out = []
     for k, (area, (cy, cx)) in enumerate(zip(areas, centres, strict=True), start=1):
-        perimeter = cracks[k] * math.pi / 4.0
+        sel = bl == k
+        perimeter = _perimeter(bx[sel].astype(float), by[sel].astype(float), float(cx), float(cy))
         heywood = perimeter / (2.0 * math.sqrt(math.pi * area)) if area > 0 else math.inf
         out.append(Particle(k, float(area), float(cx), float(cy), float(perimeter), float(heywood)))
     return out
