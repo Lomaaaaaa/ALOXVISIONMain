@@ -158,7 +158,10 @@ class Services:
     """Everything a function may use. ``devices``: ``highmag``, ``lowmag``, ``z``, ``xy``, ``wl`` (any may be missing:
     :meth:`device` raises a clear error). ``profile``: the active recipe; ``settings``: ``alox.ini``; ``exposures``: an
     :class:`alox.core.exposures.ExposureTable`; ``folders``: :class:`alox.core.folders.Folders` (None in tests: no files
-    written); ``publish``: the event bus; ``log``: the application log (``info``/``warning``/``error``)."""
+    written); ``publish``: the event bus; ``log``: the application log (``info``/``warning``/``error``);
+    ``statuses``: the status IDs of the high-level measurements by name (``"mesa"``, ``"tilt"``, ``"bowing"``:
+    :class:`alox.core.status.FunctionStatusID`, ``set(code)``), which the high-level functions update during their run
+    (each change becomes the websocket ``<name>_status`` event); missing in tests unless given."""
 
     devices: Mapping[str, Any] = field(default_factory=dict)
     profile: ProfileReader = field(default_factory=_NoProfile)
@@ -168,6 +171,7 @@ class Services:
     folders: Any = None
     publish: Publish | None = None
     log: Any = None
+    statuses: Mapping[str, Any] = field(default_factory=dict)
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
 
@@ -176,6 +180,12 @@ class Services:
             return self.devices[name]
         except KeyError:
             raise LookupError(f"device {name!r} is not available") from None
+
+    def set_status(self, measure: str, code: int) -> None:
+        """Set the status ID of a high-level measurement (``"mesa"``, ``"tilt"``, ``"bowing"``) when it is given."""
+        holder = self.statuses.get(measure)
+        if holder is not None:
+            holder.set(int(code))
 
     def camera(self, camera_type: Any) -> Any:
         return self.device(camera_device_name(camera_type))

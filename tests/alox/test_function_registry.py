@@ -38,3 +38,18 @@ def test_missing_modules_and_failing_factories_are_reported():
                        FunctionName.SEARCH_OBJECT: "skipped: device 'xy' is not available",
                        FunctionName.MESA_MEASURE: "not available (alox.functions.no_such_module)"}
     assert runner.function(FunctionName.TRACKING).run(3, None) == 3
+
+
+def test_services_of_a_core_carry_the_measure_statuses(tmp_path):
+    from alox.core.core import Core, CoreConfig
+    from alox.core.folders import Folders
+    from alox.functions.registry import build_services
+
+    root = tmp_path / "alox"
+    folders = Folders(exe=tmp_path, settings=root / "s", vision=root / "v", data=root / "d", profiles=root / "p",
+                      exposures=root / "e", jobhistory=root / "j")
+    core = Core(folders, config=CoreConfig(supervise_hardware=False, heartbeat=False))
+    services = build_services(core)
+    assert sorted(services.statuses) == ["bowing", "mesa", "tilt"]
+    services.set_status("mesa", 404)
+    assert core.measures[next(m for m in core.measures if m.name == "MESA")].code == 404

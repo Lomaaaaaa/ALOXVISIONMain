@@ -24,10 +24,12 @@ log = logging.getLogger(__name__)
 
 def build_services(core: Any, images: Any = None) -> Services:
     """The :class:`Services` of a :class:`alox.core.core.Core` (its devices, active profile, settings, exposure table,
-    folders, event bus and log); ``images`` defaults to the core's image manager."""
+    folders, event bus, log and the status IDs of the high-level measurements); ``images`` defaults to the core's
+    image manager."""
     kwargs: dict[str, Any] = {"devices": core.devices, "profile": core.profile_manager, "settings": core.properties,
                               "exposures": core.exposures, "folders": core.folders, "publish": core.events.publish,
-                              "log": core.log}
+                              "log": core.log,
+                              "statuses": {m.name.lower(): holder for m, holder in getattr(core, "measures", {}).items()}}
     sink = images if images is not None else getattr(core, "images", None)
     if sink is not None and hasattr(sink, "put"):
         kwargs["images"] = sink
