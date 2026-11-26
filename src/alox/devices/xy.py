@@ -7,8 +7,8 @@ Hardware: two PI C-663 controllers (GCS 2.0) on one RS-232 port in a daisy chain
 
 What the device keeps from LabVIEW's AloxXYServer: the per-controller set-up, the reference check before every move
 that re-initialises (and references) both axes when either lost its reference, the check that a move's destination is
-inside the wafer, and the periodic wafer-limit supervision that stops the stages and the joystick when they leave the
-wafer. What changes (plan §6): the supervision goes through the device's worker like every other operation, so it can
+inside the wafer, and the periodic wafer-limit supervision of joystick motion (owner's decision B2: a soft wall that
+holds the stage on the limit instead of LabVIEW's stop, which stays available). What changes (plan §6): the supervision goes through the device's worker like every other operation, so it can
 no longer interleave frames with a command on the shared port; an automatic re-homing is published as the event
 ``device.xy.rehomed``; a move refused because it leaves the wafer, or refused by a controller, is reported by the move
 itself.
@@ -30,8 +30,8 @@ from aloxcam.settings import SimulationOptions, StageOptions, ZStageSettings
 from aloxcam.zstage.backend import StageBackend
 from aloxcam.zstage.controller import ZController
 
-__all__ = ["AXES", "WaferSettings", "XYAxisSettings", "XYSettings", "XYStage", "XYStatus", "build_xy_backends",
-           "load_xy_settings"]
+__all__ = ["AXES", "LIMIT_MODES", "MAX_MOVE_RADIUS_MM", "WaferSettings", "XYAxisSettings", "XYSettings", "XYStage",
+           "XYStatus", "build_xy_backends", "load_xy_settings"]
 
 log = logging.getLogger(__name__)
 
@@ -60,15 +60,25 @@ class XYAxisSettings:
                               slow_speed=self.slow_speed, min_pos=-math.inf, max_pos=math.inf)
 
 
+#: Owner's decision B1: the move radius can be raised up to 105 mm.
+MAX_MOVE_RADIUS_MM = 105.0
+#: Supervision behaviours at the limit: the soft wall (owner B2) or LabVIEW's stop.
+LIMIT_MODES = ("wall", "stop")
+
+
 @dataclass(frozen=True)
 class WaferSettings:
     """The wafer used by the two checks (``docs/vision-core/xy-stage.md`` §5, §6). A diameter or an origin of 0 means
     "undefined": every position is accepted, as in LabVIEW.
 
     - Before a move, the destination must be within ``move_radius_mm`` of the wafer origin. LabVIEW hard-wires 80 mm
-      (``alox_xy_check_wafer position d0``; the diameter only switches the check on); the radius in the deployed
-      executable is an open question (xy-stage.md Q4), hence the setting.
-    - The periodic supervision stops the stages beyond ``diameter_mm / 2``.
+      (``alox_xy_check_wafer position d0``); owner's decision B1: 80 mm by default, settable up to
+      :data:`MAX_MOVE_RADIUS_MM` (``[hardware.xy] moveradius_DBL``).
+    - The periodic supervision (``limits_enabled``) acts on joystick motion and on motion without a commanded move.
+      ``limit_mode = "wall"`` (owner's decision B2, the default): "do not stop the stage, but do not let it go any
+      further" — beyond ``move_radius_mm`` (the same limit as the commanded moves) the stage is brought back onto that
+      circle and the joystick stays usable. ``"stop"``: LabVIEW's behaviour, the stages are stopped beyond
+      ``diameter_mm / 2``.
     """
 
     diameter_mm: float = 100.0
@@ -77,6 +87,14 @@ class WaferSettings:
     limits_enabled: bool = False
     check_period_ms: int = 500
     move_radius_mm: float = 80.0
+    limit_mode: str = "wall"
+    wall_margin_mm: float = 0.5
+
+    def __post_init__(self) -> None:
+        if self.limit_mode not in LIMIT_MODES:
+            raise ValueError(f"limit_mode must be one of {LIMIT_MODES}, not {self.limit_mode!r}")
+        if not (math.isfinite(self.move_radius_mm) and 0 < self.move_radius_mm <= MAX_MOVE_RADIUS_MM):
+            raise ValueError(f"move_radius_mm must be in ]0, {MAX_MOVE_RADIUS_MM:g}] mm, not {self.move_radius_mm!r}")
 
     @property
     def defined(self) -> bool:
@@ -94,6 +112,24 @@ class WaferSettings:
         """Move check: distance to the origin ≤ ``move_radius_mm`` (TRUE when the wafer is undefined)."""
         return not self.defined or self._distance(x, y) <= self.move_radius_mm
 
+    @property
+    def supervision_radius_mm(self) -> float:
+        """Where the supervision acts: ``move_radius_mm`` for the wall, ``diameter_mm / 2`` for LabVIEW's stop."""
+        return self.move_radius_mm if self.limit_mode == "wall" else self.diameter_mm * 0.5
+
+    def supervised(self, x: float, y: float) -> bool:
+        """Inside the supervision zone (TRUE when the wafer is undefined)."""
+        return not self.defined or self._distance(x, y) <= self.supervision_radius_mm
+
+    def wall_point(self, x: float, y: float) -> tuple[float, float]:
+        """The point of the wall circle (``move_radius_mm − wall_margin_mm``) on the line from the origin to (x, y)."""
+        ox, oy = self.origin
+        distance = self._distance(x, y)
+        radius = max(0.0, self.move_radius_mm - self.wall_margin_mm)
+        if distance == 0.0:
+            return ox, oy
+        return ox + (x - ox) * radius / distance, oy + (y - oy) * radius / distance
+
 
 @dataclass(frozen=True)
 class XYSettings:
@@ -106,7 +142,8 @@ def load_xy_settings(ini: Any, *, warn: Callable[[str], None] = log.warning) -> 
     """``XYSettings`` from a :class:`alox.config.TypedIni` of ``alox.ini`` (map Part 2 §2.8): ``[hardware.xy]``
     ``comport``, ``baudrate`` (index 0-3), ``xaxis``/``yaxis`` (device numbers), ``speed``, ``slowspeed``,
     ``waferxorg``/``waferyorg``, ``chuckxorg``/``chuckyorg``, ``waferlimit``, ``wafercheckfreq``; ``[general]
-    wafersize``. Defaults as in LabVIEW."""
+    wafersize``. Defaults as in LabVIEW. New optional keys: ``moveradius`` (mm, default 80, at most 105: owner B1) and
+    ``waferlimitmode`` (``wall``, the default, or ``stop``: owner B2)."""
     from aloxcam.config.alox_ini import BAUD_BY_INDEX
 
     def get(name: str, default: Any) -> Any:
@@ -123,7 +160,16 @@ def load_xy_settings(ini: Any, *, warn: Callable[[str], None] = log.warning) -> 
         baudrate = 9600
     common = {"com": get("hardware.xy.comport", 2), "baudrate": baudrate, "speed": get("hardware.xy.speed", 10.0),
               "slow_speed": get("hardware.xy.slowspeed", 1.0)}
+    radius = float(get("hardware.xy.moveradius", 80.0))
+    if not (math.isfinite(radius) and 0 < radius <= MAX_MOVE_RADIUS_MM):
+        warn(f"alox.ini: [hardware.xy] moveradius = {radius} mm is not in ]0, {MAX_MOVE_RADIUS_MM:g}]; 80 used")
+        radius = 80.0
+    mode = str(get("hardware.xy.waferlimitmode", "wall")).strip().lower()
+    if mode not in LIMIT_MODES:
+        warn(f"alox.ini: [hardware.xy] waferlimitmode = {mode!r} is not one of {LIMIT_MODES}; wall used")
+        mode = "wall"
     wafer = WaferSettings(
+        move_radius_mm=radius, limit_mode=mode,
         diameter_mm=get("general.wafersize", 100.0),
         origin=(get("hardware.xy.waferxorg", 0.0), get("hardware.xy.waferyorg", 0.0)),
         chuck_origin=(get("hardware.xy.chuckxorg", 0.0), get("hardware.xy.chuckyorg", 0.0)),
@@ -531,15 +577,18 @@ class XYStage(Device):
                 self._check_pending.clear()
 
     def check_wafer_limits(self) -> bool:
-        """One supervision step (worker thread); returns whether the position is inside the supervision zone.
+        """One supervision step (worker thread); returns whether the position is inside the supervision zone
+        (:meth:`WaferSettings.supervised`).
 
-        Outside the zone, the stages are stopped (``STP`` and ``ERR?`` on both axes) when the joystick is on, or when
-        they move without a commanded move in progress. A commanded move is left alone, so the stage can be brought
-        back onto the wafer (LabVIEW stopped it too and the stage stayed stuck outside: xy-stage.md X3). The joystick
-        stays on unless ``disable_joystick_on_limit`` (LabVIEW's ``JON 0`` is disabled code, xy-stage.md §6). The
-        event ``wafer_limit`` is published once per excursion."""
+        Outside the zone, it acts when the joystick is on, or when the stages move without a commanded move in
+        progress: they are stopped (``STP`` and ``ERR?`` on both axes) and, with the wall (owner B2), brought back onto
+        the wall circle with the joystick off during that move, then the joystick is switched on again. A commanded
+        move is left alone, so the stage can be brought back onto the wafer (LabVIEW stopped it too and the stage
+        stayed stuck outside: xy-stage.md X3). ``disable_joystick_on_limit`` leaves the joystick off afterwards
+        (LabVIEW's ``JON 0`` is disabled code, xy-stage.md §6). The event ``wafer_limit`` is published once per
+        excursion (``held``: brought back by the wall)."""
         x, y = self._read_position()
-        if self.inside_wafer(x, y):
+        if self.wafer.supervised(x, y):
             self._outside_reported = False
             return True
         moving = any(self.controllers[name].is_moving() for name in AXES)
@@ -548,18 +597,44 @@ class XYStage(Device):
         joystick = self.controllers["x"].qjon(1)
         if not (joystick or (moving and not self._commanded_move)):
             return False
-        log.warning("%s: position (%g, %g) mm outside the wafer: stopping the stages", self.name, x, y)
+        wall = self.wafer.limit_mode == "wall"
+        log.warning("%s: position (%g, %g) mm outside the limit: %s", self.name, x, y,
+                    "holding the stages on the limit" if wall else "stopping the stages")
         for name in AXES:
             controller = self.controllers[name]
             steps: list[Callable[[], object]] = [controller.stp, controller.check_error]
-            if self.disable_joystick_on_limit:
+            if self.disable_joystick_on_limit or (wall and joystick):
                 steps.append(lambda c=controller: c.jon(1, False))
             for step in steps:
                 try:
                     step()
                 except StageError as exc:
                     log.debug("%s: wafer-limit stop step failed on %s (cleared): %s", self.name, name, exc)
+        held = False
+        if wall:
+            held = self._back_to_wall(x, y)
+            if joystick and not self.disable_joystick_on_limit:
+                for name in AXES:
+                    try:
+                        self.controllers[name].jax(1, 1)
+                        self.controllers[name].jon(1, True)
+                    except StageError as exc:
+                        log.warning("%s: joystick not switched on again on %s: %s", self.name, name, exc)
         if not self._outside_reported:
             self._outside_reported = True
-            self.emit("wafer_limit", x=x, y=y, joystick=joystick)
+            self.emit("wafer_limit", x=x, y=y, joystick=joystick, held=held)
         return False
+
+    def _back_to_wall(self, x: float, y: float) -> bool:
+        """Move to the wall point of (x, y) and wait (worker thread); False when the move fails (logged)."""
+        target = self.wafer.wall_point(x, y)
+        try:
+            for name, value in zip(AXES, target, strict=True):
+                self.controllers[name].mov(value)
+                self.controllers[name].check_error()
+            for name in AXES:
+                self.controllers[name].general_wait(polling_ms=10, timeout_s=self.options.wait_timeout_s)
+        except StageError as exc:
+            log.error("%s: could not bring the stages back to the limit (%g, %g) mm: %s", self.name, *target, exc)
+            return False
+        return True

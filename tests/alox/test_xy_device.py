@@ -76,7 +76,8 @@ def topics(events: list[Event]) -> list[str]:
     return [e.topic for e in events]
 
 
-WAFER = WaferSettings(diameter_mm=100.0, origin=(100.0, 100.0))
+WAFER = WaferSettings(diameter_mm=100.0, origin=(100.0, 100.0), limit_mode="stop")      # LabVIEW's stop
+WALL = WaferSettings(diameter_mm=100.0, origin=(100.0, 100.0))                          # owner B2
 
 
 # ============================================================================================== open and moves
@@ -179,6 +180,45 @@ def test_a_commanded_move_back_onto_the_wafer_is_not_stopped(make_xy):
     assert xy.call("check", xy.check_wafer_limits) is False                     # still outside, moving: left alone
     xy.wait_end_move()
     assert xy.position() == pytest.approx((110.0, 100.0))
+
+
+def test_the_wall_holds_joystick_motion_on_the_limit(make_xy, events):
+    """Owner B2: "do not stop it, but do not let it go any further"."""
+    xy, sx, _ = make_xy(wafer=WALL)
+    xy.move_absolute(100.0, 100.0)
+    xy.set_joystick(True)
+    assert xy.call("check", xy.check_wafer_limits) is True
+    xy.set_joystick(False)
+    sx.mov("1", 190.0)                                    # 90 mm from the origin, beyond the 80 mm limit
+    xy.wait_end_move()
+    xy.set_joystick(True)
+    assert xy.call("check", xy.check_wafer_limits) is False
+    assert xy.position() == pytest.approx((179.5, 100.0), abs=1e-3)            # on the wall (80 − 0.5 mm)
+    assert xy.joystick_enabled()                          # usable again at once
+    limit = [e for e in events if e.topic == "device.xy.wafer_limit"]
+    assert len(limit) == 1 and limit[0].data["held"] is True
+    assert xy.call("check", xy.check_wafer_limits) is True
+
+
+def test_the_wall_also_holds_motion_without_a_commanded_move(make_xy):
+    xy, sx, _ = make_xy(wafer=WALL)
+    xy.move_absolute(100.0, 100.0)
+    sx.mov("1", 15.0)                                     # driven away behind the device's back, joystick off
+    xy.wait_end_move()
+    assert xy.call("check", xy.check_wafer_limits) is False                     # outside but still: left alone
+    sx.mov("1", 10.0)
+    assert xy.call("check", xy.check_wafer_limits) is False                     # moving, not commanded: held
+    assert xy.position() == pytest.approx((20.5, 100.0), abs=1e-3)
+    assert not xy.joystick_enabled()
+
+
+def test_move_radius_and_limit_mode_settings():
+    assert WaferSettings(move_radius_mm=105.0).move_radius_mm == 105.0
+    for bad in ({"move_radius_mm": 120.0}, {"move_radius_mm": 0.0}, {"limit_mode": "bounce"}):
+        with pytest.raises(ValueError):
+            WaferSettings(**bad)
+    assert WALL.supervision_radius_mm == 80.0 and WAFER.supervision_radius_mm == 50.0
+    assert WALL.wall_point(100.0, 300.0) == pytest.approx((100.0, 179.5))
 
 
 def test_wafer_limit_supervision_runs_in_the_background(make_xy, events):
@@ -284,6 +324,17 @@ def test_load_xy_settings_defaults_and_bad_baud_index():
     s = load_xy_settings(TypedIni.parse("[hardware.xy]\nbaudrate_I32 = 9\n"), warn=warnings.append)
     assert s.x.baudrate == 9600 and warnings
     assert (s.x.device, s.y.device, s.wafer.diameter_mm, s.wafer.limits_enabled) == (1, 2, 100.0, False)
+    assert (s.wafer.move_radius_mm, s.wafer.limit_mode) == (80.0, "wall")
+
+
+def test_load_xy_move_radius_and_limit_mode():
+    """Owner B1 / B2: optional keys ``moveradius`` (≤ 105 mm) and ``waferlimitmode``."""
+    s = load_xy_settings(TypedIni.parse("[hardware.xy]\nmoveradius_DBL = 105,000000\nwaferlimitmode_STR = stop\n"))
+    assert (s.wafer.move_radius_mm, s.wafer.limit_mode) == (105.0, "stop")
+    warnings: list[str] = []
+    s = load_xy_settings(TypedIni.parse("[hardware.xy]\nmoveradius_DBL = 120,000000\nwaferlimitmode_STR = x\n"),
+                         warn=warnings.append)
+    assert (s.wafer.move_radius_mm, s.wafer.limit_mode) == (80.0, "wall") and len(warnings) == 2
 
 
 # ============================================================================================== real driver
