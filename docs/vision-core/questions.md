@@ -75,3 +75,8 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 | R19 | Stop of a continuous mesa job sends `failed` (LabVIEW), not `finished`: keep? | `failed` | functions/mesa.py |
 | R20 | Send `measure_mesa` also for cycles where the mesa or oxide was not found? | only found ones | functions/mesa.py |
 | R21 | Recipe EXPOSURE MODE value 1 meaning; Oxyd Target key `measure.oxyd.oxydtarget` or `measure.mesa.oxydtarget`? | auto exposure; both read | functions/mesa.py |
+| R22 | Tilt Dual Objects: remove object 1 before searching object 2 (our reading) or keep only its box (literal)? Same model for both? | object 1 removed | functions/tilt.py |
+| R23 | Tilt object Min Score (%) ×10 against NI's 0–1000 score (LabVIEW used it unscaled)? | ×10 | functions/tilt.py |
+| R24 | Tilt and edge methods used in recipes; a recorded tilt image with LabVIEW's angle (sign convention) | all ported | vision/tilt.py |
+| R25 | Save tilt images only for a valid tilt? | every attempt | functions/tilt.py |
+| R26 | Retry tilt autofocus/refocus errors as bowing does? | ends at once | functions/tilt.py |
