@@ -33,8 +33,9 @@ NI → here (``IMAQ Find Straight Edges 3`` is closed source; this is a document
 - ``Hough Edge Rake``: every edge of every line; the line supported by the most edges (RANSAC over all the edges:
   the maximum of a Hough accumulator, without its quantisation), at most one used edge per search line (the nearest).
 - ``First Edge Projection`` / ``Best Edge Projection``: the image is projected (averaged) along candidate edge
-  orientations every ``Angle Tolerance`` degrees (then refined ten times finer), the first / the strongest edge of
-  each projected profile is taken and the orientation with the strongest such edge wins; the used edges are the edges
+  orientations every ``Angle Tolerance`` degrees within ±45° of the rake's line direction (then refined ten times
+  finer), over the part of each projection that crosses the whole ROI; the first / the strongest edge of each
+  projected profile is taken and the orientation with the strongest such edge wins; the used edges are the edges
   of the rake (one per line, the nearest) lying within ``fit_max_distance_px`` of that line, so that MIN POINTS OK?
   keeps a meaning. Large images are sub-sampled for the projection (at most ``projection_samples`` pixels).
 - ``Min. Score`` / ``Max. Score`` / ``Min. SNR`` / ``Hough Iterations`` have no equivalent (accepted, not used);
@@ -332,7 +333,7 @@ def _projection_line(image: np.ndarray, direction: RakeDirection, options: EdgeO
         idx = np.floor((s - s0) / stride).astype(np.int64)
         counts = np.bincount(idx)
         sums = np.bincount(idx, weights=vals)
-        keep = np.flatnonzero(counts >= max(2, 0.25 * counts.max()))
+        keep = np.flatnonzero(counts >= max(2, 0.5 * counts.max()))      # where the projection crosses the ROI
         if keep.size < 3:
             return None
         lo, hi = int(keep[0]), int(keep[-1])
@@ -345,19 +346,24 @@ def _projection_line(image: np.ndarray, direction: RakeDirection, options: EdgeO
             return None
         return abs(edge[1]), s0 + (lo + edge[0] + 0.5) * stride
 
-    def search(rotations: np.ndarray) -> tuple[float, float, float] | None:
-        best: tuple[float, float, float] | None = None
+    def search(rotations: np.ndarray) -> list[tuple[float, float, float]]:
+        out: list[tuple[float, float, float]] = []
         for r in rotations:
             got = evaluate(float(r))
-            if got is not None and (best is None or got[0] > best[0]):
-                best = (got[0], got[1], float(r))
-        return best
+            if got is not None:
+                out.append((got[0], got[1], float(r)))
+        return out
 
-    coarse = search(np.arange(-90.0, 90.0, tolerance_deg))
-    if coarse is None:
+    coarse = search(np.arange(-45.0, 45.0 + tolerance_deg / 2.0, tolerance_deg))   # the edge crosses the rake
+    if not coarse:
         return None
-    fine = search(coarse[2] + np.linspace(-tolerance_deg, tolerance_deg, 21)) or coarse
-    _, position, rotation = fine
+    best = max(coarse)
+    fine = search(best[2] + np.linspace(-tolerance_deg, tolerance_deg, 21)) or [best]
+    top = max(f[0] for f in fine)
+    # the strength is flat near the true orientation: the centre of the angles within 1 % of the maximum
+    rotation = float(np.mean([f[2] for f in fine if f[0] >= 0.99 * top]))
+    got = evaluate(rotation)
+    position = got[1] if got is not None else max(fine)[1]
     a = math.radians(base + rotation)
     dx, dy = math.cos(a), -math.sin(a)
     px, py = cx + position * dx, cy + position * dy

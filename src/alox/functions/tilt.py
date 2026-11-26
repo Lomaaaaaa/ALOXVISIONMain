@@ -591,9 +591,11 @@ class TiltMeasurement(MeasurementFunction):
         job = ctx.job if ctx.job is not None else getattr(params, "job", None) or JobInfo()
         try:
             p = self.params_for(params)
-        except AloxError:                                           # invalid parameters: no motion
+        except AloxError as exc:                                    # invalid parameters: no motion
             self.services.set_status("tilt", int(TiltStatus.ERROR))
-            raise
+            if isinstance(exc, TiltError):
+                raise
+            raise TiltError(exc.code, exc.source) from exc
         run = _TiltJob(self, p, job, ctx)
         try:
             report = run.execute()
