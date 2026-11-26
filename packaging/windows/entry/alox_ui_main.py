@@ -12,7 +12,20 @@
 import multiprocessing
 import sys
 
-from frozen_support import has_option, user_folder
+from frozen_support import has_option, install_folder, user_folder
+
+
+def _copy_translations(target):
+    """The demo reads ``<demo>\\translations`` (the folder of its ``alox_setup.ini``): give it the installed
+    ``<exe>\\translations\\*.lang`` it does not have yet."""
+    import shutil
+
+    source = install_folder() / "translations"
+    files = sorted(source.glob("*.lang")) if source.is_dir() else []
+    for path in files:
+        if not (target / path.name).exists():
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target / path.name)
 
 
 def _arguments(argv: list[str]) -> tuple[list[str], bool]:
@@ -25,6 +38,7 @@ def _arguments(argv: list[str]) -> tuple[list[str], bool]:
             from alox.devices.scene import make_demo
 
             setup = make_demo(demo)
+        _copy_translations(demo / "translations")
         args = ["--simulate", "--no-api", "--setup-ini", str(setup), *args]
     screenshot = has_option(args, "--screenshot")
     if not has_option(args, "--log-dir") and not screenshot:

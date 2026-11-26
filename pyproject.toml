@@ -27,6 +27,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 aloxcam = ["data/*.toml"]
+alox = ["devices/scene_demo/*.ini"]   # the simulation demo (alox.devices.scene --make-demo)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -28,6 +28,7 @@ missing one into a warning (test builds only: the bundle then lacks that feature
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -95,6 +96,9 @@ HIDDEN = (
 DATAS = [
     (str(SRC / "alox" / "devices" / "scene_demo" / "*.ini"), "alox/devices/scene_demo"),   # the simulation demo
     (str(SRC / "aloxcam" / "data" / "*.toml"), "aloxcam/data"),                          # wire enum tables
+    # camera_check --fake: the fake stack's "producer" is the module file itself (FAKE_PRODUCER = Path(__file__)),
+    # which must exist; the module is still imported from the archive.
+    (str(SRC / "alox" / "devices" / "fake_harvesters.py"), "alox/devices"),
 ]
 for dist in ("harvesters", "genicam"):       # camera_check reports their versions (importlib.metadata)
     if _present(dist):
@@ -191,6 +195,10 @@ a = Analysis(                                 # noqa: F821
     noarchive=False,
     optimize=0,                               # keep the docstrings and asserts (argparse help, checks)
 )
+# Qt libraries that only Qt plugins the window does not need bring in (the virtual-keyboard input context needs
+# Qt Quick / QML, the PDF image format Qt Pdf): about 20 MB.
+UNUSED_QT = re.compile(r"^(lib)?(qt6(quick|qml|pdf|virtualkeyboard)|qpdf|qtvirtualkeyboard)", re.IGNORECASE)
+a.binaries = [entry for entry in a.binaries if not UNUSED_QT.match(Path(entry[0]).name)]
 pyz = PYZ(a.pure)                             # noqa: F821
 user_scripts = {Path(script).stem for script, _console in PROGRAMS.values()}
 

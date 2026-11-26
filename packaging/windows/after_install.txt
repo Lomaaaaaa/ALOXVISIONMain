@@ -1,0 +1,17 @@
+ALOX Vision (Python) is installed in C:\Program Files\Aloxtec\AloxVisionPy, next to the LabVIEW application, which
+was not changed. Only one of the two may run at a time: stop LabVIEW before starting the Python application or a
+check tool, and stop them before starting LabVIEW again.
+
+Before the first start on the machine's hardware (details: README-installation.md in the installation folder):
+
+1. alox_setup.ini: copy alox_setup.ini.example to alox_setup.ini in the installation folder and set the [folders]
+   (separate Python folders, recommended for the test sessions, or LabVIEW's own alox_setup.ini to share its folders).
+   Without it the LabVIEW folders D:\alox\... are used.
+2. alox_default.ini and translations\*.lang: copied from the LabVIEW folder if you gave it on the previous page;
+   otherwise copy them by hand. Never copy passwords.
+3. Run the check tools (Start menu > Alox Vision (Python) > Check tools), LabVIEW stopped; each shows its help.
+4. In a Command Prompt in the installation folder:  alox.exe --check   (opens the devices, prints their status).
+5. Start "Alox Vision" (the operator window).
+
+"Alox Vision (simulation demo)" runs a simulated machine (no hardware, no network port), also while LabVIEW runs.
+To go back to LabVIEW only: uninstall "ALOX Vision (Python)" (Settings > Apps); LabVIEW is untouched.

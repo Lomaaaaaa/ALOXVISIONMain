@@ -53,6 +53,13 @@ licence file bound to one PC and signed with Aloxtec's private key (`keygen` onc
 `issue`, `verify`; see its help); the file goes next to the executable as `licence.alox`, and
 `alox.ini [general] licence_BOOL = TRUE` turns the boot check on (`pip install -e ".[licence]"`).
 
+### Windows installer
+
+[`packaging/windows/`](packaging/windows/README.md) builds the application for the machine PCs: a PyInstaller folder
+(`alox.exe`, the windowed `alox-ui.exe`, the check tools) and an Inno Setup installer that puts it in
+`C:\Program Files\Aloxtec\AloxVisionPy`, side by side with LabVIEW (`packaging\windows\build.ps1`). Its README covers
+what to copy from the LabVIEW installation, the first start on a machine and the rollback.
+
 ## Documentation
 
 The LabVIEW code has been analysed into a specification for the re-implementation. It is in [`docs/`](docs/README.md).
