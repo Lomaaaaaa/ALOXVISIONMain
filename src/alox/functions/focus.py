@@ -50,8 +50,9 @@ Choices of this implementation (documented deviations):
   ``FocusOptions.newest_frame = False`` reproduces "Next".
 - The Slow AF final over-travel ``MOV`` (one step beyond ``Z Max``) is skipped, with a warning, when it is outside the
   stage's software limits: the device refuses such moves, and LabVIEW never failed a completed scan for it.
-- Autofocus ``best_z`` is the strict argmax of the raw scores (Vision Core "Curve Maximum"), for information only:
-  as in LabVIEW the stage is not moved there (Q22: the client chooses the best Z from the table).
+- Autofocus ``best_z`` is the strict argmax of the raw scores (Vision Core "Curve Maximum"). **Owner's decision B9**:
+  at the end the stage moves to it (at the restored speed, waited for); LabVIEW left it where the scan ended (Q22).
+  ``FocusOptions.af_move_to_best = False`` gives LabVIEW's behaviour back.
 - Refocus PNG: pixels as written by :func:`aloxcam.imaging.png.write_png`; NI's "Vision Info" overlay block (the ROI)
   is not written (§8.3, D17).
 """
@@ -289,6 +290,7 @@ class FocusOptions:
     newest_frame: bool = True                # Camera.grab(newest=…); False = IMAQdx "Next" as LabVIEW
     normal_speed: float | None = None        # mm/s set at the start; None = ZStage.settings.speed (alox.ini)
     check_z_limits: bool = False             # af_check_z_limits (D5): refuse [Z Min, Z Max] outside the limits (9405)
+    af_move_to_best: bool = True             # owner B9: autofocus ends at its best Z (LabVIEW: where the scan ended)
     metrics: NiCompatMetrics = field(default_factory=NiCompatMetrics)   # NI behaviour parameters (07 §9.1)
 
     def __post_init__(self) -> None:
@@ -309,7 +311,7 @@ class FocusResult:
     """The outcome of a run. ``table``: rows ``(Z mm, score)`` (``Last Focus Data``, §2.6): autofocus one row per image
     in acquisition order; refocus one row per planned position, 0 for unmeasured ones. ``best_*``: refocus = the
     position the stage was moved to (strict argmax, first maximum wins, NaN never wins); autofocus = the same argmax,
-    for information (the stage is not moved, Q22); None without measurements. ``position``: ``POS?`` at the end (None
+    where the stage ends (owner B9; ``FocusOptions.af_move_to_best``); None without measurements. ``position``: ``POS?`` at the end (None
     if unreadable). ``progress``: ``Focus Progress (%)`` of the last step (§2.7). ``images``: refocus PNG files."""
 
     table: tuple[tuple[float, float], ...]
@@ -480,7 +482,11 @@ class _Job:
             raise FocusFailed(code, source, state=self.failed_state,
                               result=self.result(self._position())) from self.error
         self._restore(position=False)                                # "Finished. Restore initial speed"
+        self.finish()
         return self.result(self._position())
+
+    def finish(self) -> None:
+        """After a successful run and the speed restore (autofocus: move to the best Z, owner B9)."""
 
     def fail(self, exc: BaseException, state: StrEnum) -> StrEnum:
         """Record the error of ``state`` and go to ``Error``."""
@@ -668,6 +674,21 @@ class _AutofocusJob(_Job):
             return self.fail(err, AFState.MEASURE)
         return nxt
 
+    def finish(self) -> None:
+        """Owner's decision B9: end at the best Z (waited for; LabVIEW left the stage where the scan ended)."""
+        if not self.options.af_move_to_best:
+            return
+        best = _strict_argmax([s for _, s in self.rows])
+        if best is None:
+            return
+        target = self.rows[best][0]
+        lo, hi = self.z.limits
+        if not lo <= target <= hi:
+            log.warning("autofocus: best Z %g mm outside the limits [%g, %g] mm: not moved", target, lo, hi)
+            return
+        self.ctx.check()
+        self.z.move_absolute(target, wait=True)
+
     def _move_next(self, z_next: float) -> None:
         if z_next > self.p.z_max:                                 # the final over-travel MOV (Q22: reproduced)
             lo, hi = self.z.limits
@@ -688,8 +709,8 @@ class _AutofocusJob(_Job):
 class Autofocus(_FocusFunction):
     """Autofocus "large" (``alox_camera_server_autofocus.vi``, §4): scans ``[Z Min, Z Max]`` step by step (Slow: move,
     100 ms settle, grab, measure) or in one continuous move (Fast: Z interpolated from time), returns the ``[Z, score]``
-    table and leaves the stage where the scan ended (Slow: one step beyond the last point; Fast: ``Z Max``) at its
-    initial speed. ``run`` raises :class:`aloxcam.errors.FocusError` 9504 / 9405 for refused parameters (no motion),
+    table and, at its initial speed, moves the stage to the best Z (owner B9; LabVIEW left it where the scan ended:
+    Slow one step beyond the last point, Fast ``Z Max``, which ``FocusOptions(af_move_to_best=False)`` reproduces). ``run`` raises :class:`aloxcam.errors.FocusError` 9504 / 9405 for refused parameters (no motion),
     :class:`FocusFailed` after the ``Error`` state, :class:`alox.core.functions.Stopped` on stop/abort (after the
     restore)."""
 

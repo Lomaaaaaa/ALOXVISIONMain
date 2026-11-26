@@ -196,7 +196,7 @@ def test_slow_autofocus_points_progress_and_end_state(rig):
     rig.z.set_speed(2.0)
     result = rig.autofocus().run(slow_params(), rig.ctx())
     assert [z for z, _ in result.table] == [1.0, 1.1, 1.2000000000000002, 1.3000000000000003, 1.4000000000000004]
-    assert result.best_z == 1.2000000000000002 and result.best_index == 2       # nearest to Z_FOCUS; not moved
+    assert result.best_z == 1.2000000000000002 and result.best_index == 2       # nearest to Z_FOCUS
     assert result.best_score == max(s for _, s in result.table)
     states = rig.states("autofocus_large")
     assert [s["state"] for s in states] == (["Start"] + ["Goto Z Pos", "Measure"] * 5 + ["Finished"])
@@ -207,8 +207,15 @@ def test_slow_autofocus_points_progress_and_end_state(rig):
     assert states[-1]["progress"] == 100.0 and result.progress == 100.0
     assert rig.sim.velocity == 2.0                                                   # VEL Init Speed
     assert "MOV 1 1.5000" in rig.sim.frames                                          # one step beyond Z Max
-    assert rig.settled_position() == pytest.approx(1.5)
+    assert rig.settled_position() == pytest.approx(result.best_z)                    # owner B9: ends at the best Z
+    assert result.position == pytest.approx(result.best_z)
     assert rig.camera.newest == [True] * 5                                           # Camera.grab(newest=True)
+
+
+def test_autofocus_can_leave_the_stage_where_the_scan_ended_as_labview(rig):
+    """``af_move_to_best=False``: LabVIEW's end position (one step beyond Z Max), Q22."""
+    rig.autofocus(af_move_to_best=False).run(slow_params(), rig.ctx())
+    assert rig.settled_position() == pytest.approx(1.5)
 
 
 def test_slow_autofocus_settles_100_ms_at_each_point(rig):
@@ -236,7 +243,7 @@ def test_final_over_travel_move_outside_the_limits_is_skipped(rig, caplog):
         result = rig.autofocus().run(slow_params(z_min=19.6, z_max=20.0, step=0.2), rig.ctx())
     assert [z for z, _ in result.table] == [19.6, 19.8, 20.0]
     assert "outside the limits" in caplog.text
-    assert rig.settled_position() == pytest.approx(20.0)
+    assert rig.settled_position() == pytest.approx(result.best_z)                    # 19.6, nearest to the focus
 
 
 def test_points_outside_the_limits_fail_at_once(rig):
@@ -261,7 +268,7 @@ def test_fast_autofocus_scans_continuously(rig):
     assert zs[-1] >= 1.5                                                          # last image: elapsed ≥ Duration
     assert abs(result.best_z - Z_FOCUS) <= 0.015
     assert rig.sim.velocity == 2.0
-    assert rig.settled_position() == pytest.approx(1.5)
+    assert rig.settled_position() == pytest.approx(result.best_z)
     states = rig.states("autofocus_large")
     assert [s["state"] for s in states][:4] == ["Start", "Goto Z Pos", "Wait Started", "Measure"]
     measures = [s for s in states if s["state"] == "Measure"]
