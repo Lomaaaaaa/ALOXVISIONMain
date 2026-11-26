@@ -125,7 +125,7 @@ class SceneParams:
     seed: int = 7
     image_width: int = 612                   # the simulated sensor (real cameras 2448 × 2048)
     image_height: int = 512
-    frame_rate_max: float = 20.0             # the simulated cameras' maximum frame rate
+    frame_rate_max: float = 40.0             # the simulated cameras' maximum frame rate
     # wafer
     wafer_diameter_mm: float = 0.0           # 0: general.wafersize (76.2)
     tilt_deg: float = 0.0                    # rotation of the wafer about its centre (counter-clockwise)
@@ -171,7 +171,8 @@ class SceneParams:
     contrast_max: float = 0.55
     contrast_min: float = 0.08
     contrast_white: float = 0.25             # zero order (0 nm) and LED
-    # light and sensor: grey = 255·gain·light·R·exposure/full_scale + dark (+ noise)
+    # light and sensor: grey = 255·gain·light·R·exposure/full_scale + dark (+ noise); gain: the camera's linear gain
+    # (``CameraAttributes::…Gain``, below 1 read as 1)
     full_scale_exposure_us: float = 10000.0
     lamp_peak_nm: float = 800.0
     lamp_width_nm: float = 350.0
@@ -452,7 +453,7 @@ class Scene:
         wl = self._wavelength() if self._wavelength is not None else self.params.contrast_peak_nm
         return (float(xy[0]), float(xy[1])), float(z), float(wl)
 
-    def render(self, camera: str, *, exposure_us: float, gain_db: float = 0.0, width: int | None = None,
+    def render(self, camera: str, *, exposure_us: float, gain: float = 1.0, width: int | None = None,
                height: int | None = None, number: int = 0, stage_xy: tuple[float, float] | None = None,
                z_mm: float | None = None, wavelength_nm: float | None = None, led: bool | None = None,
                t: float | None = None, noise: bool = True) -> np.ndarray:
@@ -470,14 +471,14 @@ class Scene:
         centre = self.stage_to_wafer(float(xy[0]), float(xy[1]))
         aperture = round(self.aperture_um(t), 3)
         px = self.pixel_size_um(camera)
-        key = (w, h, px, centre, round(z, 6), round(wl, 3), on, aperture, float(exposure_us), float(gain_db),
+        key = (w, h, px, centre, round(z, 6), round(wl, 3), on, aperture, float(exposure_us), max(1.0, float(gain)),
                self.wafer_radius_mm())
         with self._lock:
             cached = self._cache.get(camera)
         if cached is not None and cached[0] == key:
             clean = cached[1]
         else:
-            clean = self._clean(camera, w, h, px, centre, z, wl, on, aperture, float(exposure_us), float(gain_db))
+            clean = self._clean(camera, w, h, px, centre, z, wl, on, aperture, float(exposure_us), max(1.0, float(gain)))
             with self._lock:
                 self._cache[camera] = (key, clean)
         img = clean
@@ -516,7 +517,7 @@ class Scene:
         return np.take(self._tile, (iy << 10) | ix) * gain
 
     def _clean(self, camera: str, w: int, h: int, px: float, centre: tuple[float, float], z: float, wl: float,
-               led: bool, aperture_um: float, exposure_us: float, gain_db: float) -> np.ndarray:
+               led: bool, aperture_um: float, exposure_us: float, gain: float) -> np.ndarray:
         """The noiseless frame (float32 grey levels)."""
         p = self.params
         cx, cy = centre
@@ -551,7 +552,7 @@ class Scene:
             cover = cover * _step(np.float32(y0 + flat_um) + dv, sw)
 
         light, contrast = self.light(camera, wl, led)
-        scale = np.float32(255.0 * light * exposure_us / p.full_scale_exposure_us * 10.0 ** (gain_db / 20.0))
+        scale = np.float32(255.0 * light * exposure_us / p.full_scale_exposure_us * gain)
         out = np.full(shape, np.float32(p.dark_level), dtype=np.float32)
         if scale <= 0:
             return out
@@ -635,7 +636,7 @@ class Scene:
             if camera not in CAMERAS:
                 camera = "highmag"
             return self.render(camera, exposure_us=float(device.attribute_value(SIM_EXPOSURE)),
-                               gain_db=float(device.attribute_value(SIM_GAIN)), number=number)
+                               gain=float(device.attribute_value(SIM_GAIN)), number=number)
         return source
 
     def model_image(self, mark: int = 0, camera: str = "lowmag", margin_um: float = 60.0) -> np.ndarray:

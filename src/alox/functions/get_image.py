@@ -522,7 +522,11 @@ class _Job:
         a new frame is awaited when it changes; the part the camera cannot apply stays digital. Returns the digital gain
         left to apply (1.0 when the camera applied everything; the recipe Gain when the camera gain cannot be set)."""
         recipe = self.p.gain if self.p.gain > 0 else 1.0
-        base = min(10.0, max(1.0, float(self.setting(f"hardware.camera.{self.p.camera}.gain", 1.0) or 1.0)))
+        raw = self.setting(f"hardware.camera.{self.p.camera}.gain", 1.0)
+        try:                # without a Gain_DBL key the name reads the gain_STR attribute path: base gain 1
+            base = min(10.0, max(1.0, float(raw or 1.0)))
+        except (TypeError, ValueError):
+            base = 1.0
         target = base * recipe
         try:
             camera = self.s.camera(int(self.p.camera_type))

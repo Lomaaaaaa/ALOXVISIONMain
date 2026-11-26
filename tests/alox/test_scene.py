@@ -127,7 +127,8 @@ def test_grey_levels_follow_exposure_gain_and_saturate(scene: Scene):
     double = float(frame(scene, exposure=8000.0, noise=False).mean())
     dark = scene.params.dark_level
     assert (double - dark) == pytest.approx(2.0 * (base - dark), rel=0.02)
-    assert float(frame(scene, exposure=4000.0, gain_db=6.0206, noise=False).mean()) == pytest.approx(double, rel=0.02)
+    assert float(frame(scene, exposure=4000.0, gain=2.0, noise=False).mean()) == pytest.approx(double, rel=0.02)
+    assert np.array_equal(frame(scene, gain=0.0, noise=False), frame(scene, gain=1.0, noise=False))   # ≥ 1
     assert frame(scene, exposure=80000.0).max() == 255
 
 
