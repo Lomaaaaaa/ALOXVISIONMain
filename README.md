@@ -1,6 +1,12 @@
-# AloxCamServer
+# ALOXVISIONMain
 
-Re-implementation of the ALOX Vision Core **Alox Camera Server** (`alox_camera_server.vi`, LabVIEW 2018).
+The Python rewrite of **ALOX Vision Core** (LabVIEW V1.2.6.2): the integrated application `alox` (devices, recipes,
+measurement functions, operator window, supervisor API, Windows installer), described in
+[The integrated application](#the-integrated-application-alox). The repository was called AloxCamServer until
+27/11/2026; the old address still redirects here.
+
+It started as the re-implementation of the ALOX Vision Core **Alox Camera Server** (`alox_camera_server.vi`, LabVIEW
+2018), the package `aloxcam` described below, now kept as reference and test tooling.
 
 The LabVIEW server is a TCP server that drives:
 
