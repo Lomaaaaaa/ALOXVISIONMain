@@ -80,7 +80,9 @@ The LabVIEW code has been analysed into a specification for the re-implementatio
 
 ## Development set-up
 
-Python 3.11 or later. The only runtime dependency is numpy; the real Z stage needs pyserial (`pip install -e
+Python 3.12 or later, 3.13 recommended (the installer is built with 3.13). On Python 3.11, PySide6 6.12 loses a
+reference to `None` at every Qt drawing call and the operator window soon crashes ("deallocating None"); the check
+tools of `tools/` do not use Qt and still run on 3.11. The only runtime dependency is numpy; the real Z stage needs pyserial (`pip install -e
 ".[stage]"`); the tests need pytest and pyserial (both in `[dev]`).
 
 ```sh
@@ -135,10 +137,10 @@ LabVIEW default folders `D:\alox\…` apply, which off Windows need `ALOX_DRIVE_
 
 ### On Windows (the target platform)
 
-In a Command Prompt, from the repository folder. `py` is the Python launcher installed with Python 3.11+.
+In a Command Prompt, from the repository folder. `py` is the Python launcher installed with Python; `py -0` lists the versions installed.
 
 ```bat
-py -3 -m venv .venv
+py -3.13 -m venv .venv
 .venv\Scripts\pip install -e ".[dev]"
 .venv\Scripts\python -m pytest
 ```

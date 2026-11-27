@@ -66,7 +66,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
-from typing import Any, Self, TypeVar
+from typing import Any, Self
 
 import numpy as np
 
@@ -106,7 +106,6 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
-_E = TypeVar("_E", bound=IntEnum)
 
 #: ``alox_en.lang`` codes.
 INVALID_ARGUMENTS = 9002                  # "invalid arguments error"
@@ -145,7 +144,7 @@ class LabelledEnum(IntEnum):
         return coerce_enum(cls, value, what)
 
 
-def coerce_enum(cls: type[_E], value: Any, what: str) -> _E:
+def coerce_enum[E: IntEnum](cls: type[E], value: Any, what: str) -> E:
     """A member of ``cls`` from a member, its code, its label (``"Obj learning"``) or its name (``"OBJ_LEARNING"``,
     any case); else :class:`FunctionError` 9002."""
     if isinstance(value, cls):

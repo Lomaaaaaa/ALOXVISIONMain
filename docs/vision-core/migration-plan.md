@@ -4,7 +4,7 @@
 
 This plan turns the [map](map.md) into a route for rewriting the whole ALOX Vision Core application (V1.2.6.2).
 
-- **Language:** Python 3.11+. Images: NumPy, OpenCV, SciPy. REST and websocket: FastAPI (uvicorn) and a websocket server.
+- **Language:** Python 3.12+ (3.13 recommended; PySide6 6.12 crashes on 3.11). Images: NumPy, OpenCV, SciPy. REST and websocket: FastAPI (uvicorn) and a websocket server.
   Hardware: pyserial (PI GCS, monochromator, pyrometer), Modbus TCP, a GenICam or vendor SDK for the cameras. One code base,
   packaged as a Windows application.
 - **Architecture: one integrated application** (owner's decision, 25/11/2026). The three hardware server programs

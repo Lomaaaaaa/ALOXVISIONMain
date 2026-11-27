@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "alox"
 version = "0.3.0"
 description = "Python rewrite of ALOX Vision Core (LabVIEW): the integrated application and the camera server reference"
-requires-python = ">=3.11"
+requires-python = ">=3.12"   # PySide6 6.12 loses references to None on 3.11: the window crashes
 dependencies = ["numpy>=1.24", "scipy>=1.10", "pillow>=10"]   # scipy: circle and oxide-rate fits (alox.vision); pillow: overlays, JPEG (alox.core.images)
 
 [project.optional-dependencies]
