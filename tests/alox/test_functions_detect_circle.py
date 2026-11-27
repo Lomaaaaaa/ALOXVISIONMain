@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -169,6 +170,17 @@ def test_obj_learning_matches_the_model(rig, tmp_path):
     with pytest.raises(FunctionError) as info:
         rig.run(image=image, algo_method="Obj learning", model_path=tmp_path / "missing.png")
     assert info.value.code == 9015
+
+
+def test_obj_learning_reads_a_bare_model_name_in_the_recipe_folder(rig, tmp_path):
+    """Real recipes write ``modelpath_PATH = "mesa_model.png"``: the file of the loaded recipe (``<settings>/profile``),
+    not one in the current directory."""
+    image = disc_image([MESA], noise=1.0)
+    (tmp_path / "profile").mkdir()
+    write_png(tmp_path / "profile" / "mesa_model.png", image[89:210, 122:243].copy())
+    rig.services.folders = SimpleNamespace(profile=tmp_path / "profile")
+    report = rig.run(image=image, algo_method="Obj learning", model_path="mesa_model.png")
+    assert (report.best_circle.x, report.best_circle.y) == pytest.approx((182, 149), abs=1.0)
 
 
 def marked_mesa(cx: float, cy: float, angle: float) -> np.ndarray:

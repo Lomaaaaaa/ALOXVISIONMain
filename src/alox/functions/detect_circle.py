@@ -43,8 +43,9 @@ Fixed (internal defects, or behaviour that cannot be kept):
 - ``Obj learning`` flipped the match positions with ``hardware.camera.highmag.hflip/vflip``: the image is already
   flipped by the camera device, so the positions are used as found. The match radius, absent from NI's result, is
   half the smaller side of the model.
-- The model path: ``detect.vcsel.modelpath`` when set, else ``<settings>/profile/mesa_model.png`` (LabVIEW built a
-  path in the Windows documents folder). The geometric matcher is the :class:`alox.vision.matching.Matcher` of Search
+- The model path: ``detect.vcsel.modelpath`` when set (a relative path, as real recipes write it: ``"mesa_model.png"``,
+  is in the recipe folder ``<settings>/profile``, as for Search Object and Tilt), else
+  ``<settings>/profile/mesa_model.png`` (LabVIEW built a path in the Windows documents folder). The geometric matcher is the :class:`alox.vision.matching.Matcher` of Search
   Object (NI when available, else normalised cross-correlation with a rotation search over 0–360°, up to 50 matches;
   see :mod:`alox.vision.matching` for how the scores differ); the occlusion range is passed but the correlation
   matchers ignore it. The template is learned once per model file (and downsampling).
@@ -609,8 +610,11 @@ class _DetectJob:
         """``IMAQ Setup/Match Geometric Pattern 2`` (rotation 0–360°, score × 10) with the model PNG."""
         p = self.p
         path = Path(str(p.model_path)) if str(p.model_path) else None
-        if path is None and self.s.folders is not None:
-            path = Path(self.s.folders.profile) / "mesa_model.png"
+        folders = self.s.folders
+        if path is None and folders is not None:
+            path = Path(folders.profile) / "mesa_model.png"
+        elif path is not None and not path.is_absolute() and folders is not None:
+            path = Path(folders.profile) / path         # a bare name (real recipes: "mesa_model.png"): the recipe's file
         if path is None:
             raise FunctionError(DETECT_CIRCLE_ERROR, "detect circle: no model image (Search Model Path)")
         factor = p.downsampling.factor

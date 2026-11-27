@@ -259,7 +259,7 @@ def test_table_is_stored_in_the_profile_property(tmp_path: Path) -> None:
     lut.set_auto_expo(725, AutoExposureData(21000, 18000, 24000, 50, 200))
     store.save()
     text = (tmp_path / "recipe.ini").read_bytes().decode("cp1252")
-    assert text.startswith('[general]\r\nexposures_TABLE.<size(s)> = "11 7"\r\nexposures_TABLE 0 = 700,000000\r\n')
+    assert text.startswith('[general]\r\nexposures_TABLE = "<size(s)=11 7> 700,000000 ')
     reloaded = ExposureTable(ProfileProperties.read(tmp_path / "recipe.ini"))
     assert all(same(a, b) for a, b in zip(reloaded.table(), lut.table(), strict=True))
     assert reloaded.auto_expo(725)[1].auto_expo == 21000

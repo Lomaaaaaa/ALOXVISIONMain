@@ -70,6 +70,8 @@ __all__ = [
     "Properties",
     "TypedStore",
     "format_points",
+    "format_table",
+    "parse_inline_table",
     "parse_number",
     "parse_points",
     "read_table",
@@ -82,8 +84,10 @@ SCALAR_SUFFIXES = ("BOOL", "DBL", "I32", "U32", "STR", "PATH")
 ALL_SUFFIXES = (*SCALAR_SUFFIXES, "PTS", "TABLE")
 INVALID_PROPERTY = 9006
 
-#: OpenG variant-config array layout (**inferred**, see :func:`read_table`): ``<key>.<size(s)> = "rows cols"``.
+#: Legacy array layout (read only, see :func:`read_table`): ``<key>.<size(s)> = "rows cols"`` + one key per element.
 TABLE_SIZE_TAG = ".<size(s)>"
+#: OpenG ``Write Key (Variant)`` array value as found in real recipes: ``"<size(s)=20 7> 700,000000 6710,609340 ..."``.
+_INLINE_TABLE = re.compile(r"^\s*<size\(s\)=(?P<dims>[^>]*)>(?P<values>.*)$", re.IGNORECASE | re.DOTALL)
 _ELEMENT = re.compile(r"^(?P<base>.+_TABLE) (?P<index>\d+(?:[ ,]\d+)?)$", re.IGNORECASE)
 _COMMA = re.compile(r"\d,\d")
 _POINT = re.compile(r"\d\.\d")
@@ -140,13 +144,43 @@ def format_points(points: Iterable[tuple[float, float]], decimal: str = ",") -> 
     return '"' + escape_string(body) + '"'
 
 
-def read_table(cfg: NIConfig, section: str, key: str) -> list[list[float]]:
-    """A ``TABLE`` key (2-D DBL array) as written by OpenG ``Write Key (Variant)__ogtk``.
+def parse_inline_table(text: str) -> list[list[float]]:
+    """A ``TABLE`` value (2-D DBL array) as OpenG ``Write Key (Variant)__ogtk`` writes it, confirmed on a real recipe
+    (``[general] exposures_TABLE``): ``<size(s)=<rows> <cols>>`` then the elements in row-major order, separated by
+    spaces, each ``%f`` with the system decimal separator (``700,000000``) or ``NaN`` / ``Inf``. One dimension → one
+    column. :class:`InvalidProperty` when the size is unreadable or the number of elements does not match it."""
+    m = _INLINE_TABLE.match(text)
+    if m is None:
+        raise InvalidProperty(f"not an array value: {text[:40]!r}")
+    try:
+        dims = [int(token) for token in re.split(r"[\s,;]+", m.group("dims").strip()) if token]
+        values = [parse_number(token) for token in m.group("values").split()]
+    except ValueError as exc:
+        raise InvalidProperty(f"unreadable array value: {exc}") from None
+    if len(dims) == 1:
+        dims.append(1)
+    if len(dims) != 2 or min(dims) < 0:
+        raise InvalidProperty(f"<size(s)={m.group('dims')}> is not a 2-D array size")
+    rows, cols = dims
+    if len(values) != rows * cols:
+        raise InvalidProperty(f"<size(s)={rows} {cols}> holds {len(values)} elements, {rows * cols} expected")
+    return [values[r * cols:(r + 1) * cols] for r in range(rows)] if cols else []
 
-    **Inferred layout (no real file available, to confirm):** ``<key>.<size(s)> = "<rows> <cols>"`` then one key per
-    element, ``<key> <i>`` with the row-major flat index ``i`` (also accepted: ``<key> <row> <col>`` and
-    ``<key> <row>,<col>``), each a double (decimal point or comma, ``NaN``). One dimension → one column.
-    :class:`InvalidProperty` when the size or an element is missing or unreadable.
+
+def format_table(table: list[list[float]], decimal: str = ",") -> str:
+    """The quoted INI value of a ``TABLE`` key, the layout of :func:`parse_inline_table`:
+    ``"<size(s)=2 3> 700,000000 25000,000000 NaN ..."``; an empty table → ``"<size(s)=0 0>"``."""
+    rows = len(table)
+    cols = len(table[0]) if rows else 0
+    body = "".join(f" {format_double(v, decimal)}" for row in table for v in row)
+    return f'"<size(s)={rows} {cols}>{body}"'
+
+
+def read_table(cfg: NIConfig, section: str, key: str) -> list[list[float]]:
+    """A ``TABLE`` array in the legacy layout of earlier versions of this application (still read; :meth:`save`
+    rewrites it as :func:`format_table`): ``<key>.<size(s)> = "<rows> <cols>"`` then one key per element,
+    ``<key> <i>`` with the row-major flat index ``i`` (also accepted: ``<key> <row> <col>`` and ``<key> <row>,<col>``),
+    each a double. One dimension → one column. :class:`InvalidProperty` when the size or an element is missing.
     """
     size_text = cfg.read_str(section, key + TABLE_SIZE_TAG, "")
     try:
@@ -175,15 +209,6 @@ def read_table(cfg: NIConfig, section: str, key: str) -> list[list[float]]:
                 raise InvalidProperty(f"[{section}] {key}: element ({r}, {c}) is missing")
         table.append(row)
     return table
-
-
-def _table_keys(base: str, table: list[list[float]], decimal: str) -> list[tuple[str, str]]:
-    rows = len(table)
-    cols = len(table[0]) if rows else 0
-    pairs = [(base + TABLE_SIZE_TAG, f'"{rows} {cols}"')]
-    pairs += [(f"{base} {r * cols + c}", format_double(v, decimal)) for r, row in enumerate(table)
-              for c, v in enumerate(row)]
-    return pairs
 
 
 def _is_real(value: object) -> bool:
@@ -349,9 +374,15 @@ class TypedStore:
                     else:
                         written = key
                         name, suffix = split_typed_key(key)
-                        if suffix is None or suffix == "TABLE":
+                        if suffix is None:
                             raise InvalidProperty(f"Invalid property '{section}.{key}'")
-                        value = self._read_value(cfg, section, key, suffix)
+                        if suffix == "TABLE":
+                            value = parse_inline_table(cfg.read_str(section, key, ""))
+                            if any(k.lower() == (key + TABLE_SIZE_TAG).lower() for k in cfg.keys(section)):
+                                log.warning("%s: [%s] %s written in both layouts; the one-line value is read",
+                                            self.path or "<text>", section, key)
+                        else:
+                            value = self._read_value(cfg, section, key, suffix)
                 except (InvalidProperty, ConfigTypeInvalid, ValueError) as exc:
                     invalid.append(f"{section}.{key}")
                     log.warning("%s: %s (skipped)", self.path or "<text>", exc)
@@ -569,10 +600,10 @@ class TypedStore:
         if entry.suffix == "PTS":
             doc.set(entry.section, entry.key, format_points(entry.value, self.decimal))
         elif entry.suffix == "TABLE":
-            pairs = _table_keys(entry.key, entry.value, self.decimal)
-            for key, text in pairs:
-                doc.set(entry.section, key, text)
-            self._remove_elements(doc, entry.section, entry.key, keep={k.lower() for k, _ in pairs})
+            doc.set(entry.section, entry.key, format_table(entry.value, self.decimal))
+            while doc.remove(entry.section, entry.key + TABLE_SIZE_TAG):   # the legacy layout, if it was read
+                pass
+            self._remove_elements(doc, entry.section, entry.key, keep=set())
         else:
             doc.set(entry.section, entry.key, format_value(entry.suffix, entry.value, decimal=self.decimal))
 
@@ -589,9 +620,8 @@ class TypedStore:
             while doc.remove(entry.section, entry.key + TABLE_SIZE_TAG):
                 pass
             self._remove_elements(doc, entry.section, entry.key, keep=set())
-        else:
-            while doc.remove(entry.section, entry.key):
-                pass
+        while doc.remove(entry.section, entry.key):
+            pass
 
 
 def _same_file(a: Path, b: Path) -> bool:

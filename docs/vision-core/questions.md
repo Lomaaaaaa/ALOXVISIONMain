@@ -139,3 +139,23 @@ a default (the LabVIEW behaviour, unless noted) that a setting or a one-line cha
 Questions raised by this work (for the next round): is "Fit" for rectangles something other than the equivalent
 diameter (it now equals Surface)? JSON names "Depth" / "Height_Y" / "Width_X" in `Type_Measure_Rate`? A recipe whose
 short grid pitch runs perpendicular to the flat needs `latticeangledeg = 90`.
+
+### Machine files received (2026-11-27)
+
+Five `alox.ini` variants (USB IDS, GigE IDS, USB Allied, mixed USB/GigE, and one test file), an `alox_setup.ini` and
+a recipe `default.zip` (`default.ini` + `mesa_model.png`, `mesa_mask.png`, `detect_object_model.png`,
+`detect_object_mask.png`). They were checked against the application's readers; they are **not** committed (the tests
+use synthetic equivalents).
+
+| Item | Finding | Status |
+|---|---|---|
+| D2 | `[hardware.xy]` writes `xaxis_I32` twice (1, then 10): the first is read, so the X axis is 1, as LabVIEW reads it | Answered |
+| D2 | `xmax`/`xmin` exist as `_I32` (±25) and `_DBL` (0..150): the type the reader asks for chooses, as in LabVIEW | No change |
+| D3 | Recipe exposure table: OpenG writes it on **one line**, `exposures_TABLE = "<size(s)=20 7> 700,000000 …"`; the inferred one-key-per-cell layout was wrong, so the table was skipped | Fixed: read and written in the real layout; a rewritten recipe is byte-identical; the old layout is still read |
+| D3 | Recipe model paths are bare file names (`modelpath_PATH = "mesa_model.png"`); Detect Circle did not look in the recipe folder | Fixed (Search Object and Tilt already did) |
+| D3 | `alox_setup.ini` LabVIEW paths (`/D/alox/02-Vision`) resolve to `D:\alox\02-Vision\…` on Windows | No change |
+| R15 | `Gain_DBL` (High Mag 2, Low Mag 0) is the base gain; `gain_STR` is the attribute path. Low Mag 0 is coerced to 1 | No change |
+| — | Refocus Fin ROI 1299 × 2000 needs cameras at least 2000 px high (2448 × 2048); the Low Mag ROI `[1299, 2000, W, H]` is a 48-px strip there, as in LabVIEW (Q21) | Kept as LabVIEW |
+| — | One file names the High Mag camera "LowMagg" and the Low Mag "HighMag" (both USB): a test file? | To confirm |
+| — | `[webservice] port_I32 = 8001`; the application's REST API listens on 8002 (`--rest-port`) | To confirm |
+| — | All recipe keys are read except the Get Image display keys, the unused Blobs keys (`detect.vcsel.binary*`, …), and the autofocus/refocus window and overlay switches | As designed |

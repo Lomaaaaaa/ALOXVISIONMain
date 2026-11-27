@@ -14,6 +14,8 @@ from alox.core.properties import (
     Properties,
     TypedStore,
     format_points,
+    format_table,
+    parse_inline_table,
     parse_number,
     parse_points,
 )
@@ -336,19 +338,51 @@ def test_table_read_write_round_trip(tmp_path: Path) -> None:
     assert store.suffix_of("general.exposures") == "TABLE"
     store.set("general.exposures", [[1, 2], [3, 4], [5, 6]])
     store.save()
-    text = text_of(path)
-    assert 'exposures_TABLE.<size(s)> = "3 2"' in text
-    assert "exposures_TABLE 5 = 6,000000" in text
-    assert "exposures_TABLE 6" not in text
+    text = text_of(path)                    # rewritten in the one-line layout of real recipes, legacy keys removed
+    assert 'exposures_TABLE = "<size(s)=3 2> 1,000000 2,000000 3,000000 4,000000 5,000000 6,000000"' in text
+    assert "<size(s)>" not in text and "exposures_TABLE 0" not in text and 'name_STR = "x"' in text
     assert TypedStore.read(path).get("general.exposures") == [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
-    store.set("general.exposures", [[9, 8]])                               # shrinking removes stale elements
+    store.set("general.exposures", [[9, 8]])
     store.save()
-    text = text_of(path)
-    assert "exposures_TABLE 2" not in text and text.endswith('name_STR = "x"\r\n')
+    assert 'exposures_TABLE = "<size(s)=1 2> 9,000000 8,000000"' in text_of(path)
     with pytest.raises(ValueError):
         store.set("general.exposures", [[1, 2], [3]])
     with pytest.raises(TypeError):
         store.set("general.exposures", [["a"]])
+
+
+# The layout of real recipes (OpenG Write Key (Variant)): one quoted line, size then the elements row by row.
+INLINE_TABLE_TEXT = (
+    "[general]\r\n"
+    'exposures_TABLE = "<size(s)=2 3> 700,000000 25000,000000 NaN 725,000000 30000,000000 1,500000"\r\n'
+    "version_I32 = 1    \r\n"
+)
+
+
+def test_inline_table_is_read_and_rewritten_byte_identical(tmp_path: Path) -> None:
+    path = write(tmp_path / "p.ini", INLINE_TABLE_TEXT)
+    store = TypedStore.read(path)
+    assert store.invalid == []
+    table = store.get("general.exposures")
+    assert table[0][:2] == [700.0, 25000.0] and math.isnan(table[0][2]) and table[1] == [725.0, 30000.0, 1.5]
+    store.set("general.exposures", [[1.0, 2.0, 3.0]])
+    store.save()
+    store.set("general.exposures", table)
+    store.save()
+    assert text_of(path) == INLINE_TABLE_TEXT
+
+
+def test_inline_table_codec() -> None:
+    assert parse_inline_table("<size(s)=2 2> 1 2,5 3 4") == [[1.0, 2.5], [3.0, 4.0]]
+    assert parse_inline_table("<size(s)=3> 1 2 3") == [[1.0], [2.0], [3.0]]
+    assert parse_inline_table("<size(s)=0 0>") == []
+    assert format_table([[700, 1.5]], ".") == '"<size(s)=1 2> 700.000000 1.500000"'
+    assert format_table([]) == '"<size(s)=0 0>"'
+    for bad in ("1 2 3", "<size(s)=2 2> 1 2 3", "<size(s)=x> 1", "<size(s)=1 1> abc"):
+        with pytest.raises(InvalidProperty):
+            parse_inline_table(bad)
+    store = TypedStore.parse('[g]\nt_TABLE = "<size(s)=1 2> 1"\n')
+    assert store.invalid == ["g.t_TABLE"]
 
 
 def test_table_with_missing_element_is_invalid(tmp_path: Path) -> None:
