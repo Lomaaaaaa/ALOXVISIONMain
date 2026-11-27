@@ -1,0 +1,50 @@
+# Builds the Windows installer of ALOX Vision (Python) on a GitHub Windows machine:
+# packaging/windows/build.ps1 (clean venv, PyInstaller, smoke test, Inno Setup), then uploads the installer as an
+# artifact of the run. Started by hand (Actions > Windows installer > Run workflow) or by pushing a tag v*, so it does
+# not spend Actions minutes on every push.
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: "3.13"
+          architecture: x64
+
+      - name: Inno Setup 6
+        shell: pwsh
+        run: |
+          $found = (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -or (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")
+          if (-not $found) { choco install innosetup -y --no-progress }
+
+      - name: Build (PyInstaller folder, smoke test, installer)
+        shell: pwsh
+        run: .\packaging\windows\build.ps1 -Python "${{ steps.python.outputs.python-path }}"
+
+      - name: Check the installer
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem packaging\windows\dist\installer\*.exe -ErrorAction SilentlyContinue
+          if (-not $setup) { throw "No installer was built (see the Inno Setup step of the build)." }
+          $setup | ForEach-Object { "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AloxVisionPy-installer
+          path: packaging/windows/dist/installer/*.exe
+          retention-days: 30
+          if-no-files-found: error
