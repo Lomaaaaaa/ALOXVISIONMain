@@ -92,6 +92,8 @@ class ImageView(QGraphicsView):
     ROI); :meth:`roi` is the last rectangle drawn ``(left, top, right, bottom)`` in image pixels."""
 
     info = Signal(str)
+    #: The length in image pixels of a line drawn with the LINE tool (at the mouse release).
+    line_drawn = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -193,6 +195,22 @@ class ImageView(QGraphicsView):
         r = self._roi_item.rect().normalized()
         return int(r.left()), int(r.top()), int(r.right()), int(r.bottom())
 
+    def line_length(self) -> float | None:
+        """The length in image pixels of the last line drawn (None without one, or for a null line)."""
+        if not self._line_item.isVisible():
+            return None
+        line = self._line_item.line()
+        length = math.hypot(line.dx(), line.dy())
+        return length if length > 0 else None
+
+    def set_line(self, x1: float, y1: float, x2: float, y2: float) -> float | None:
+        """Draw a line (image pixels) as the LINE tool does; returns its length (tests, tools)."""
+        self._line_item.setLine(x1, y1, x2, y2)
+        self._line_item.setVisible(True)
+        length = self.line_length()
+        self.line_drawn.emit(length or 0.0)
+        return length
+
     def clear_roi(self) -> None:
         self._roi_item.setVisible(False)
         self._line_item.setVisible(False)
@@ -250,6 +268,7 @@ class ImageView(QGraphicsView):
         if self._tool is Tool.LINE:
             line = self._line_item.line()
             self.info.emit(f"line: {math.hypot(line.dx(), line.dy()):.1f} px")
+            self.line_drawn.emit(math.hypot(line.dx(), line.dy()))
         elif self._tool is Tool.RECT:
             roi = self.roi()
             if roi is not None:

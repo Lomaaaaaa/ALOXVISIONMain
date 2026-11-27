@@ -172,8 +172,17 @@ def test_rights_of_another_user_and_text_values(props: FakeProperties):
 
 def test_properties_tab_rights(props: FakeProperties):
     users = Users(props)
-    assert len(PropertiesTab) == 9
+    assert len(PropertiesTab) == 10                                       # the nine of LabVIEW + pyrometer (P1)
     assert users.has_tab_right(PropertiesTab.CAMERA, UserType.ENGINEER) is True
     assert users.has_tab_right("camera") is False
     with pytest.raises(ValueError):
         users.has_tab_right("unknown")
+
+
+def test_pyrometer_tab_right_falls_back_to_the_monochromator_right(props: FakeProperties):
+    users = Users(props)
+    props.set("user.rights.engineer.propertiesmonochromator", True)
+    assert users.has_tab_right(PropertiesTab.PYROMETER, UserType.ENGINEER) is True     # key missing: fallback
+    assert users.has_tab_right(PropertiesTab.PYROMETER, UserType.OPERATOR) is False
+    props.set("user.rights.engineer.propertiespyrometer", False)
+    assert users.has_tab_right(PropertiesTab.PYROMETER, UserType.ENGINEER) is False    # its own key wins

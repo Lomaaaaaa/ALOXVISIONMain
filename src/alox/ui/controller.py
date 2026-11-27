@@ -580,6 +580,17 @@ class Controller:
         self.core.log.info("Reset job informations (clicked)")
         return ActionResult(True, "job informations reset")
 
+    def grab(self, camera: str) -> ActionResult:
+        """GET IMAGE of the calibration dialog (``alox_calibration_ui`` frame 3: one Get Image of ``camera``, the
+        LED as ``general.setLEDcam``): the ``Get Image`` command with that camera; refused while a function runs."""
+        if camera not in ("highmag", "lowmag"):
+            return ActionResult(False, f"camera {camera!r}")
+        if not self.core.functions.condition_ok():
+            return ActionResult(False, "get image: a function is running")
+        self.core.commands.post(Method.GET_IMAGE, _HM if camera == "highmag" else _LM, source="ui")
+        self.core.log.info(f"Calibration: Get Image ({camera})")
+        return ActionResult(True)
+
     def chuck_calibration(self) -> ActionResult:
         """Chuck Calibration (properties SYSTEM page, ``alox_properties_ui`` event 77): right "Bowing", then a bowing
         measurement with the global ``Chuck Calibration`` (statuses 200, HIGH-LEVEL MEASUREMENTS tab), through the

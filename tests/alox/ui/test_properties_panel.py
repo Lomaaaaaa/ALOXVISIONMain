@@ -52,23 +52,25 @@ def test_pages_are_those_of_the_labview_tab_controls():
                       "display": PropertiesTab.OVERLAYS, "network": PropertiesTab.NETWORK,
                       "modules": PropertiesTab.MODULES, "logging": PropertiesTab.DATALOGGING,
                       "admin": PropertiesTab.ADMIN, "camera": PropertiesTab.CAMERA, "xyz": PropertiesTab.XYZSTAGES,
-                      "monochromator": PropertiesTab.MONOCHROMATOR, "pyrometer": PropertiesTab.MONOCHROMATOR}
+                      "monochromator": PropertiesTab.MONOCHROMATOR, "pyrometer": PropertiesTab.PYROMETER}
     assert set(rights.values()) - {None} == set(PropertiesTab)
     keys = [key for page in PAGES.values() for key in page.field_keys()]
     assert len(keys) == len(set(keys)), "a key is edited on two pages"
     for page in PAGES.values():
         assert page.restart <= set(page.field_keys())
+    assert not {k for p in PAGES.values() for k in p.field_keys() if "bowchuck" in k.lower()}       # owner P4
     assert {"hardware.xy.comport", "hardware.z.comport", "hardware.monochromator.comport", "hardware.camera.port",
             "webservice.port", "hardware.camera.highmag.name"} <= {k for p in PAGES.values() for k in p.restart}
     assert "general.wafersize" in PAGES["system"].restart and "overlays.fontsize" not in PAGES["display"].restart
 
 
-def test_user_actions_list_has_the_41_rights_in_labview_order():
-    assert len(RIGHT_TEXTS) == 41
+def test_user_actions_list_has_the_labview_rights_and_the_pyrometer_right():
+    assert len(RIGHT_TEXTS) == 42                                         # LabVIEW's 41 + pyrometer (owner P1)
     keys = [key for _text, key in RIGHT_TEXTS]
     assert keys[:32] == [action.key for action in UserAction]
     assert keys[32:] == [f"properties{t.value}" for t in (
-        PropertiesTab.CHAMBER, PropertiesTab.CAMERA, PropertiesTab.MONOCHROMATOR, PropertiesTab.XYZSTAGES,
+        PropertiesTab.CHAMBER, PropertiesTab.CAMERA, PropertiesTab.MONOCHROMATOR, PropertiesTab.PYROMETER,
+        PropertiesTab.XYZSTAGES,
         PropertiesTab.OVERLAYS, PropertiesTab.NETWORK, PropertiesTab.MODULES, PropertiesTab.DATALOGGING,
         PropertiesTab.ADMIN)]
     assert RIGHT_TEXTS[0][0] == "Exit Application" and RIGHT_TEXTS[7][0] == "Edit 'Get Image' function settings"
@@ -133,11 +135,33 @@ def test_pages_follow_the_tab_rights_of_the_current_user(core: Core):
     assert core.users.current is UserType.OPERATOR
 
 
-def test_initial_page_is_xyz_for_an_operator_when_the_admin_xyz_right_is_set(core: Core):
+def test_initial_page_uses_the_logged_in_users_own_xyz_right(core: Core):
     model = PropertiesModel(core)
     assert model.initial_page() == ("status", None)
-    grant(core, PropertiesTab.XYZSTAGES, user="admin")                  # the key drawn in frame 1.3
+    grant(core, PropertiesTab.XYZSTAGES, user="admin")                  # LabVIEW read this key (bug, owner P2)
+    assert model.initial_page() == ("status", None)
+    grant(core, PropertiesTab.XYZSTAGES)                                # the operator's own key
     assert model.initial_page() == ("hardware", "xyz")
+    core.users.change_password(UserType.ENGINEER, "pw")
+    assert core.users.login(UserType.ENGINEER, "pw")
+    grant(core, PropertiesTab.XYZSTAGES, user="engineer")
+    assert model.initial_page() == ("status", None)                     # only an Operator opens on XYZ STAGES
+
+
+def test_pyrometer_page_has_its_own_right_with_the_monochromator_fallback(core: Core):
+    model = PropertiesModel(core)
+    assert not model.allowed("pyrometer")
+    grant(core, PropertiesTab.MONOCHROMATOR)
+    assert model.allowed("pyrometer")                                   # key missing: the monochromator right
+    grant(core, PropertiesTab.PYROMETER, on=False)
+    assert not model.allowed("pyrometer") and model.allowed("monochromator")
+    core.properties.delete("user.rights.operator.propertiespyrometer")
+    grant(core, PropertiesTab.ADMIN)
+    admin = PropertiesModel(core).models["admin"]
+    assert admin.value("user.rights.{user}.propertiespyrometer") is True    # shown as it acts
+    assert admin.set("user.rights.{user}.propertiespyrometer", False) is None
+    assert PropertiesModel(core).models["admin"].dirty is False
+    assert admin.apply().ok and core.properties.get("user.rights.operator.propertiespyrometer") is False
 
 
 def test_admin_rights_of_a_selected_user(core: Core):

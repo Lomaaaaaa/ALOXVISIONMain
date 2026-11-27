@@ -11,7 +11,9 @@ Password. Observed in ``alox_manager_users d0..d179``:
   ``<action>`` being the label of ``alox_typedef_user_action`` in lower case without spaces ("Auto Exposure Setup" →
   ``autoexposuresetup``, d12..d173). An unknown action or user gives error 9002 "Invalid Args" and no right.
 - ``alox_default.ini`` also holds nine rights ``properties<tab>`` (admin, camera, chamber, datalogging, modules,
-  monochromator, network, overlays, xyzstages) used by the properties UI (**inferred**): :meth:`Users.has_tab_right`.
+  monochromator, network, overlays, xyzstages) used by the properties UI (``alox_properties_ui`` frame 1):
+  :meth:`Users.has_tab_right`. Deviation (owner, P1): the PYROMETER page has its own right ``propertiespyrometer``
+  (LabVIEW used the monochromator right); when the key is missing, the user's ``propertiesmonochromator`` is used.
 
 The rights are checked on UI actions only; the REST API has no authentication (map Part 5).
 
@@ -32,7 +34,8 @@ import threading
 from enum import IntEnum, StrEnum
 from typing import Any, Protocol
 
-__all__ = ["Base64PasswordStore", "PasswordStore", "Properties", "PropertiesTab", "UserAction", "UserType", "Users"]
+__all__ = ["TAB_FALLBACK", "Base64PasswordStore", "PasswordStore", "Properties", "PropertiesTab", "UserAction", "UserType",
+           "Users"]
 
 log = logging.getLogger(__name__)
 
@@ -178,7 +181,8 @@ _ACTION_LABELS = {
 
 
 class PropertiesTab(StrEnum):
-    """The tabs of the properties UI that have a right ``user.rights.<user>.properties<tab>`` (``alox_default.ini``)."""
+    """The tabs of the properties UI that have a right ``user.rights.<user>.properties<tab>`` (the nine of
+    ``alox_default.ini``, and ``pyrometer``, added: owner P1)."""
 
     ADMIN = "admin"
     CAMERA = "camera"
@@ -189,6 +193,11 @@ class PropertiesTab(StrEnum):
     NETWORK = "network"
     OVERLAYS = "overlays"
     XYZSTAGES = "xyzstages"
+    PYROMETER = "pyrometer"
+
+
+#: A tab right missing from ``alox.ini`` takes the value of this one (owner P1: machines keep their access).
+TAB_FALLBACK: dict[PropertiesTab, PropertiesTab] = {PropertiesTab.PYROMETER: PropertiesTab.MONOCHROMATOR}
 
 
 def _as_bool(value: Any) -> bool:
@@ -312,8 +321,17 @@ class Users:
         who = self.current if user is None else UserType.parse(user)
         return _as_bool(self._properties.get(self.right_key(action, who), False))
 
+    @staticmethod
+    def tab_right_key(tab: PropertiesTab | str, user: UserType | int | str) -> str:
+        """``user.rights.<user>.properties<tab>``."""
+        return f"user.rights.{UserType.parse(user).rights_key}.properties{PropertiesTab(tab).value}"
+
     def has_tab_right(self, tab: PropertiesTab | str, user: UserType | int | str | None = None) -> bool:
-        """The right ``user.rights.<user>.properties<tab>`` of the properties UI (**inferred** use)."""
+        """The right ``user.rights.<user>.properties<tab>`` of the properties UI (default FALSE); a missing
+        ``propertiespyrometer`` takes the user's monochromator right (:data:`TAB_FALLBACK`)."""
         who = self.current if user is None else UserType.parse(user)
-        key = f"user.rights.{who.rights_key}.properties{PropertiesTab(tab).value}"
-        return _as_bool(self._properties.get(key, False))
+        tab = PropertiesTab(tab)
+        value = self._properties.get(self.tab_right_key(tab, who), None)
+        if value is None and tab in TAB_FALLBACK:
+            value = self._properties.get(self.tab_right_key(TAB_FALLBACK[tab], who), None)
+        return _as_bool(False if value is None else value)

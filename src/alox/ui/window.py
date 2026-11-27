@@ -23,7 +23,8 @@ changes.
 Properties panel: SETTINGS (right "Edit Properties") opens the properties panel "Vision Core"
 (:class:`alox.ui.properties_form.PropertiesPanel` on :mod:`alox.ui.properties_panel`) in the same place, one panel at a
 time: the ``alox.ini`` settings page by page with the per-page rights, the live STATUS page (300 ms and the status
-events), RESET JOB INFORMATIONS, CHUCK CALIBRATION, change password.
+events), RESET JOB INFORMATIONS, CHUCK CALIBRATION, change password, the pixel-size calibration and XYZ setup dialogs
+(their image grab and Z moves run in the actions worker).
 
 Results panels (:mod:`alox.ui.results_panels` on the models of :mod:`alox.ui.results`, fed by the bus events): the
 HIGH-LEVEL MEASUREMENTS tab shows the running or last high-level function (Mesa, Bowing, Tilt) and the measurement
@@ -98,8 +99,6 @@ log = logging.getLogger(__name__)
 NEXT_STEPS = (
     ("Function settings panels: Refocus Oxyd (no ⚙ button on the LabVIEW panel), the panels' own tools (learning, "
      "exposure tables, test runs)"),
-    ("Properties panel dialogs: pixel size calibration (alox_calibration_ui), flat field (alox_vignetting_ui), XYZ "
-     "setup (alox_xyz_stages_ui), LOAD CHUCK REF"),
     ("Results panels still missing: Refocus Oxyd, Tracking, Search Object (LOW-LEVEL MEASUREMENTS tab), the image "
      "overlays of the run panels"),
     "Profiles editor (EDIT PROFILES: alox_profiles_ui)",
@@ -565,7 +564,7 @@ class MainWindow(QMainWindow):
 
     def _settings_placeholder(self, panel: str | None) -> None:
         self._drop_panel()
-        steps = "".join(f"<li>{step}</li>" for step in NEXT_STEPS[:2])
+        steps = "".join(f"<li>{step}</li>" for step in (NEXT_STEPS[0], NEXT_STEPS[2]))
         title = f"<b>{panel}</b>: settings panel not ported yet." if panel else "No settings panel open."
         self.settings_page.setText(f"<p>{title}</p><p>Next UI steps for this tab:</p><ul>{steps}</ul>")
         self.settings_page.show()
@@ -604,7 +603,9 @@ class MainWindow(QMainWindow):
         self.settings_page.hide()
         widget = PropertiesPanel(self.controller.properties_model(), on_close=self.close_settings,
                                  confirm=self.confirm, on_result=lambda text: self.statusBar().showMessage(text, 8000),
-                                 reset_jobs=self.reset_jobs, chuck_calibration=self.chuck_calibration)
+                                 reset_jobs=self.reset_jobs, chuck_calibration=self.chuck_calibration,
+                                 grab=lambda camera: self._act(self.controller.grab, camera),
+                                 submit=lambda fn, done: self.actions_worker.submit(fn, on_done=done))
         self.settings_layout.addWidget(widget, 1)
         self.settings_panel = widget
         self.tabs_caption(PANEL_NAME)

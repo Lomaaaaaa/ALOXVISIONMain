@@ -160,7 +160,7 @@ use synthetic equivalents).
 | — | `[webservice] port_I32 = 8001`; the application's REST API listened on 8002 | Owner: the supervisor calls 8001. Done: the REST and websocket ports are read from `alox.ini` `[webservice] port` / `[websocket] port` (defaults 8001 / 6123; `--rest-port` / `--ws-port` override) |
 | — | All recipe keys are read except the Get Image display keys, the unused Blobs keys (`detect.vcsel.binary*`, …), and the autofocus/refocus window and overlay switches | As designed |
 
-### Properties panel (to ask, from `alox_properties_ui`)
+### Properties panel (asked 2026-11-27, from `alox_properties_ui`)
 
 | # | Question | Default meanwhile | Source |
 |---|---|---|---|
@@ -169,3 +169,14 @@ use synthetic equivalents).
 | P3 | COM ports are indicators in LabVIEW; here they are editable (next start), as the application opens the ports itself. Keep editable? | editable | ui/properties_panel.py |
 | P4 | LOAD CHUCK REF: which rows/columns of the `.chuck` file give dZ1..dZ5, Zcenter and `bowchuckA/B`, and the "Estimated chuck BOW" formula? | not ported | ui/properties_panel.py |
 | P5 | Are the pixel-size calibration, flat-field (vignetting) and XYZ setup dialogs still used, or done elsewhere? | not ported (disabled buttons) | ui/properties_form.py |
+
+### Properties panel answers (2026-11-27)
+
+| # | Owner's answer | Status |
+|---|---|---|
+| P1 | "I don't know. Make it better." | Done (deviation): the PYROMETER page has its own right `user.rights.<user>.propertiespyrometer`, listed in ADMIN after the monochromator right; when the key is missing from `alox.ini`, the user's `propertiesmonochromator` is used, so existing machines keep the same access |
+| P2 | A LabVIEW bug: fix it | Done: every page reads the logged-in user's own key (an Operator with his own `propertiesxyzstages` opens on XYZ STAGES) |
+| P3 | COM ports stay editable | Kept (next start) |
+| P4 | "We don't use bow chuck value" | Done: LOAD CHUCK REF and the estimated chuck bow are not built (no button, no `bowchuckA/B` field) |
+| P5 | Calibration yes, flat field no, XYZ setup yes "to set autofocus boundaries" | Done: pixel-size calibration dialog (`alox_calibration_ui`: camera, Get Image, a line of known length, `hardware.camera.<cam>.pixelsize` / `units`); XYZ setup dialog (`alox_xyz_stages_ui`: `hardware.z.zminautofocus` / `zmaxautofocus` with the current Z and Z moves through the Z device's software range, plus the stage limits, axes and speeds of the LabVIEW dialog, next start); no flat-field button |
+| — | Machine `alox.ini` copies already in the repository (`docs/answers/ini/*.ini`, `tests/config/data/real/*.ini`): "You can keep alox.ini as a ref" | Kept as reference files |

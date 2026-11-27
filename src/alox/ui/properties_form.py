@@ -7,7 +7,8 @@ the user's right is disabled and grayed (frame 1), its inputs read-only. STATUS 
 mesa status ID and description and the current tilt, refreshed every 300 ms (the event loop's ``Timeout``) and on the
 status events of the bus, with RESET JOB INFORMATIONS. The fields are built as the function settings panels
 (:class:`alox.ui.settings_form.FieldForm`); a value used only at start-up is marked ↻ and the page says it applies at
-the next start. Under the pages: a status line and APPLY / SAVE / CANCEL / EXIT.
+the next start. Under the pages: a status line and APPLY / SAVE / CANCEL / EXIT. CALIBRATION (CAMERA) and XYZ SETUP
+(XYZ STAGES) open the dialogs of :mod:`alox.ui.properties_dialogs`; SET PASSWORD (ADMIN) the change-password dialog.
 """
 
 from __future__ import annotations
@@ -33,8 +34,11 @@ from PySide6.QtWidgets import (
 
 from alox.core.users import UserType
 from alox.ui import theme
+from alox.ui.properties_dialogs import CalibrationDialog, Submit, XyzSetupDialog
 from alox.ui.properties_panel import (
     ADMIN,
+    CAMERA,
+    CAMERAS,
     HARDWARE,
     HARDWARE_PAGES,
     PANEL_NAME,
@@ -132,13 +136,15 @@ class PropertiesPanel(FieldForm, QFrame):
     """The properties panel on ``model`` (module docstring). ``on_close()`` is called by EXIT; ``confirm(question)``
     asks before pending edits are dropped; ``on_result(text)`` reports the outcome of a button (status bar);
     ``reset_jobs()`` and ``chuck_calibration()`` are the window's actions for RESET JOB INFORMATIONS and CHUCK
-    CALIBRATION; ``status_period_ms``: the STATUS refresh (0: none, the tests refresh by hand)."""
+    CALIBRATION; ``grab(camera)`` asks for one image (calibration); ``submit(fn, on_done)`` runs the device calls of
+    the XYZ setup; ``status_period_ms``: the STATUS refresh (0: none, the tests refresh by hand)."""
 
     def __init__(self, model: PropertiesModel, *, on_close: Callable[[], None] | None = None,
                  confirm: Callable[[str], bool] = lambda _question: True,
                  on_result: Callable[[str], None] | None = None,
                  reset_jobs: Callable[[], Any] | None = None,
                  chuck_calibration: Callable[[], Any] | None = None,
+                 grab: Callable[[str], Any] | None = None, submit: Submit | None = None,
                  status_period_ms: int = STATUS_PERIOD_MS) -> None:
         super().__init__()
         self.model = model
@@ -147,6 +153,8 @@ class PropertiesPanel(FieldForm, QFrame):
         self._on_result = on_result
         self._reset_jobs = reset_jobs
         self._chuck_calibration = chuck_calibration
+        self._grab = grab
+        self._submit = submit
         self._loading = False
         self.inputs: dict[str, QWidget] = {}
         self.labels: dict[str, QLabel] = {}
@@ -297,15 +305,25 @@ class PropertiesPanel(FieldForm, QFrame):
     def _extra_system(self, column: QVBoxLayout) -> None:
         self._row(column,
                   self._button("CHUCK CALIBRATION", self.chuck_calibration if self._chuck_calibration else None,
-                               "Bowing measurement with the chuck calibration (right Bowing)"),
-                  self._button("LOAD CHUCK REF", None, "Load the chuck reference file: not ported"))
+                               "Bowing measurement with the chuck calibration (right Bowing)"))
 
     def _extra_camera(self, column: QVBoxLayout) -> None:
-        self._row(column, self._button("CALIBRATION", None, "Pixel size calibration (alox_calibration_ui): not ported"),
-                  self._button("FLAT FIELD", None, "Vignetting image acquisition (alox_vignetting_ui): not ported"))
+        column.addWidget(_label("PIXEL SIZE CALIBRATION", "section"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        self.calibrations: dict[str, QLineEdit] = {}
+        for row, (camera, text) in enumerate(CAMERAS):
+            self.calibrations[camera] = _readonly(220)
+            grid.addWidget(_label(text, "field"), row, 0)
+            grid.addWidget(self.calibrations[camera], row, 1, Qt.AlignmentFlag.AlignLeft)
+        grid.setColumnStretch(2, 1)
+        column.addLayout(grid)
+        self._row(column, self._button("CALIBRATION", self.open_calibration,
+                                       "Pixel size calibration: a line of known length on an image"))
 
     def _extra_xyz(self, column: QVBoxLayout) -> None:
-        self._row(column, self._button("XYZ SETUP", None, "Speeds and limits (alox_xyz_stages_ui): not ported"))
+        self._row(column, self._button("XYZ SETUP", self.open_xyz_setup,
+                                       "Autofocus boundaries (with the current Z), stage limits, axes and speeds"))
 
     def _extra_network(self, column: QVBoxLayout) -> None:
         grid = QGridLayout()
@@ -362,6 +380,8 @@ class PropertiesPanel(FieldForm, QFrame):
             self.hardware.setTabEnabled(index, self.model.allowed(page))
         for key, widget in self.inputs.items():
             widget.setEnabled(self.model.models[self._page_of[key]].editable)
+        self.buttons["CALIBRATION"].setEnabled(self.model.allowed(CAMERA))
+        self.buttons["XYZ SETUP"].setEnabled(self.model.xyz_setup_allowed())
         admin = self.model.allowed(ADMIN)
         for name in ("SET PASSWORD", "SAVE AS DEFAULTS"):
             self.buttons[name].setEnabled(admin)
@@ -383,6 +403,9 @@ class PropertiesPanel(FieldForm, QFrame):
             self.status_ids[line.title].setText(str(line.code))
             self.status_texts[line.title].setText(line.text)
         self.current_tilt.setText(f"{tilt:.4f}")
+        for camera, field in self.calibrations.items():
+            size, units = self.model.calibration(camera)
+            field.setText(f"{size:g} {({0: 'pixels', 1: 'µm', 2: 'mm'}).get(units, units)} / pixel")
         web, ws = self.model.urls()
         self.web_url.setText(web)
         self.ws_url.setText(ws)
@@ -494,6 +517,28 @@ class PropertiesPanel(FieldForm, QFrame):
         """CHUCK CALIBRATION (the window starts it in its worker)."""
         if self._chuck_calibration is not None:
             self._chuck_calibration()
+
+    def calibration_dialog(self, camera: str = "highmag") -> CalibrationDialog:
+        """The pixel-size calibration dialog (``alox_calibration_ui``)."""
+        return CalibrationDialog(self.model, camera, grab=self._grab, parent=self)
+
+    def open_calibration(self) -> None:
+        """CALIBRATION: the dialog; the new calibration is reported when stored."""
+        dialog = self.calibration_dialog()
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.result_calibration is not None:
+            size, _units = dialog.result_calibration
+            self._report(f"Calibration {dialog.camera_name}: {size:g} {dialog.units.currentText().lower()} per pixel")
+        self.refresh_status()
+
+    def xyz_setup_dialog(self) -> XyzSetupDialog:
+        """The XYZ stages setup dialog (``alox_xyz_stages_ui``)."""
+        return XyzSetupDialog(self.model.xyz_setup(), submit=self._submit, parent=self)
+
+    def open_xyz_setup(self) -> None:
+        """XYZ SETUP: the dialog; the values stored are reported."""
+        dialog = self.xyz_setup_dialog()
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._report("XYZ setup saved")
 
     def password_dialog(self) -> ChangePasswordDialog:
         """The change-password dialog for the user selected on ADMIN."""

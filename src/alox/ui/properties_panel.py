@@ -10,8 +10,9 @@ Panel" "Vision Core"). Title "ALOX VISION CORE PROPERTIES"; a 12-frame sequence:
   ``camera``, XYZ STAGE ``xyzstages``, MONOCHROMATOR ``monochromator`` and PYROMETER ``monochromator`` (sic), DISPLAY
   ``overlays``, NETWORK ``network``, MODULES ``modules``, LOGGING ``datalogging``, ADMIN ``admin``; then the USER
   ACTIONS list (41 rights: the 32 ``alox_typedef_user_action`` and the 9 tab rights, item texts below) and "Is
-  User='Operator' AND has right to control XYZ stages => show tab XYZ by default" (the right read is
-  ``user.rights.admin.propertiesxyzstages``, kept as drawn: :meth:`PropertiesModel.initial_page`);
+  User='Operator' AND has right to control XYZ stages => show tab XYZ by default" (LabVIEW read
+  ``user.rights.admin.propertiesxyzstages`` there, a bug: :meth:`PropertiesModel.initial_page` reads the user's own
+  key, owner P2);
 - frames 2..8 read the properties into the controls of each page (the keys below; defaults of the "Get Property"
   calls), frame 9 the event loop: ``Timeout`` 300 ms refreshes SYS. / TILT / BOWING / MESA STATUS ID and DESC and
   CURRENT TILT (°); each control's "Value Change" is a "Set Property" of its key (in memory); APPLY RIGHTS writes the
@@ -26,6 +27,12 @@ groups them: edits are pending until APPLY (into the store in memory, as LabVIEW
 then ``alox.ini``: only the changed keys are written, in place) or EXIT (LabVIEW's properties "Save" at the end,
 after asking about pending edits). Keys read by the devices at start-up only (ports, COM ports, camera names, flips,
 flat field, timeouts) are marked: they apply at the next start; the panel never reconfigures a device.
+
+Owner decisions (questions P1–P5): the PYROMETER page has its own right ``propertiespyrometer`` (falling back to the
+user's monochromator right when the key is missing: :data:`alox.core.users.TAB_FALLBACK`); LOAD CHUCK REF and the
+estimated chuck bow are not built (bow chuck values unused); no flat-field (vignetting) dialog; the pixel-size
+calibration (``alox_calibration_ui``: :class:`CalibrationModel`) and the XYZ setup (``alox_xyz_stages_ui``:
+:data:`XYZ_SETUP`, the autofocus boundaries with the current Z and Z moves through the Z device) are built.
 
 Deviations: the device controls of the LabVIEW pages (camera grab, exposure, gain, LED; XYZ moves, joysticks, homing,
 zero; monochromator moves; module start / stop / show / kill) are not here: the main window has the moves and
@@ -45,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from alox.api.backend import Measure
-from alox.core.users import PropertiesTab, UserAction, UserType
+from alox.core.users import TAB_FALLBACK, PropertiesTab, UserAction, UserType
 from alox.ui.settings_panels import (
     ApplyResult,
     Field,
@@ -63,8 +70,8 @@ from alox.ui.settings_panels import (
     text,
 )
 
-__all__ = ["HARDWARE", "PAGES", "PANEL_NAME", "RIGHT_TEXTS", "TOP_PAGES", "PropertiesModel", "PropertiesPage",
-           "StatusLine", "page_by_key"]
+__all__ = ["CALIBRATION_UNITS", "CAMERAS", "HARDWARE", "PAGES", "PANEL_NAME", "RIGHT_TEXTS", "TOP_PAGES", "XYZ_SETUP",
+           "PropertiesModel", "PropertiesPage", "StatusLine", "XyzSetupModel", "page_by_key", "pixel_size"]
 
 #: The panel name of ``alox_manager_panels`` (caption of the SETTINGS tab).
 PANEL_NAME = "Vision Core"
@@ -139,9 +146,7 @@ _CHUCK = Group("CHUCK (BOWING)", (
     num("MAX PARALLELISM", "hardware.chuck.maxparallelism", 100.0, 0.0, 100_000.0, unit="µm", step=1.0),
     path("PATH CHUCK REF FILE", "hardware.chuck.pathChuckRefFile")))
 SYSTEM = PropertiesPage("system", "SYSTEM", PropertiesTab.CHAMBER, (_CHAMBER, _WAFER, _CHUCK),
-                        restart=frozenset({"general.wafersize"}), omitted=(
-    "Estimated chuck BOW (µm): indicator computed from the chuck reference file, not ported",
-    "LOAD CHUCK REF (bowchuckA/B from the chuck reference file): the file layout is not confirmed, not ported"))
+                        restart=frozenset({"general.wafersize"}))
 
 HARDWARE = PropertiesPage("hardware", "HARDWARE DEVICES", None)
 
@@ -164,8 +169,7 @@ _HIGH, _LOW = _camera_group("HIGH MAG.", "highmag", "HighMag"), _camera_group("L
 CAMERA = PropertiesPage("camera", "CAMERA", PropertiesTab.CAMERA, (_HIGH, _LOW, _CAM_MODULE),
                         restart=_keys(_HIGH, _LOW, _CAM_MODULE), parent="hardware", omitted=(
     "GRAB HI / LO MAG, EXPO MODE, SHUTTER, SET GAIN, SET LED: live camera controls (the main window grabs images)",
-    "CALIB. (alox_calibration_ui) and FFC (alox_vignetting_ui) buttons: dialogs not ported",
-    "CALIB OK / FFC OK: indicators of the calibration manager"))
+    "FFC (alox_vignetting_ui): not used (owner P5)"))
 
 _XYZ_MODULE = Group("XYZ MODULE", (
     _port("XYZ PORT", "hardware.xy.port", 504),
@@ -182,7 +186,6 @@ XYZ = PropertiesPage("xyz", "XYZ STAGES", PropertiesTab.XYZSTAGES, (_COORDS, _XY
                      parent="hardware", omitted=(
     "X / Y / Z position controls, MOVE, STOP, JOYSTICK, HOMING: the main window has the moves and joysticks",
     "XY ZERO / XY ZERO chuck (origin = the current position): the origins are typed here",
-    "XYZ SETUP (alox_xyz_stages_ui: speeds and limits): dialog not ported",
     "WAFER POSITION: the wafer map picture (alox_manager_xy_map)"))
 
 _MONO = Group("MONOCHROMATOR MODULE", (
@@ -196,7 +199,7 @@ MONOCHROMATOR = PropertiesPage("monochromator", "MONOCHROMATOR", PropertiesTab.M
     "WL control, MOVE, current position: the main window has SET WAVELENGTH",))
 
 _PYRO = Group("PYROMETER", (_com("PYRO COM PORT", "hardware.pyro.comport", 1),))
-PYROMETER = PropertiesPage("pyrometer", "PYROMETER", PropertiesTab.MONOCHROMATOR, (_PYRO,), restart=_keys(_PYRO),
+PYROMETER = PropertiesPage("pyrometer", "PYROMETER", PropertiesTab.PYROMETER, (_PYRO,), restart=_keys(_PYRO),
                            parent="hardware")
 
 _TEXT = Group("OVERLAYS TEXT", (
@@ -242,7 +245,8 @@ _IMAGE_LOG = Group("SAVE IMAGES", tuple(check(label, f"log.save{name}", True) fo
     ("MESA", "mesaimages"), ("TILT", "tiltimages"), ("BOWING", "bowingimages"))))
 LOGGING = PropertiesPage("logging", "LOGGING", PropertiesTab.DATALOGGING, (_MESA_LOG, _DATA_LOG, _IMAGE_LOG))
 
-#: The 41 items of USER ACTIONS (``alox_properties_ui`` frame 1.2): the LabVIEW item text and the right's key.
+#: The items of USER ACTIONS (``alox_properties_ui`` frame 1.2: 41 in LabVIEW, + the pyrometer right of owner P1
+#: after the monochromator one): the LabVIEW item text and the right's key.
 RIGHT_TEXTS: tuple[tuple[str, str], ...] = (
     ("Exit Application", UserAction.EXIT_APP.key),
     ("Create vision profile", UserAction.CREATE_PROFILE.key),
@@ -268,7 +272,8 @@ RIGHT_TEXTS: tuple[tuple[str, str], ...] = (
       for verb, action, suffix in (("Run", run, ""), ("Edit", setup, " settings"))),
     *((f"Edit '{name}' properties tab", f"properties{tab.value}") for name, tab in (
         ("Chamber", PropertiesTab.CHAMBER), ("Camera", PropertiesTab.CAMERA),
-        ("Monochromator", PropertiesTab.MONOCHROMATOR), ("XYZ stages", PropertiesTab.XYZSTAGES),
+        ("Monochromator", PropertiesTab.MONOCHROMATOR), ("Pyrometer", PropertiesTab.PYROMETER),
+        ("XYZ stages", PropertiesTab.XYZSTAGES),
         ("Display", PropertiesTab.OVERLAYS), ("Network", PropertiesTab.NETWORK), ("Modules", PropertiesTab.MODULES),
         ("Data Logging", PropertiesTab.DATALOGGING), ("Admin", PropertiesTab.ADMIN))),
 )
@@ -295,6 +300,54 @@ def page_by_key(key: str) -> PropertiesPage:
     return PAGES[key]
 
 
+# ================================================================================================== XYZ setup
+#: ``alox_xyz_stages_ui`` ("ALOX XYZ STAGES SETUP", the XYZ SETUP button of XYZ STAGES): frames 1.0..1.3 read AXIS
+#: (``hardware.xy.xaxis`` / ``yaxis``, ``hardware.z.zaxis``), LIMITS (``hardware.xy.waferlimit``, ``wafercheckfreq``,
+#: ``hardware.z.zmin`` / ``zmax`` / ``zminautofocus`` / ``zmaxautofocus``) and SPEEDS (``hardware.xy.slowspeed`` /
+#: ``speed``, ``hardware.z.slowspeed`` / ``speed``); OK checks "Zmin autofocus must be > Zmin stage, Zmax autofocus
+#: must be < Zmax stage", writes the keys, applies the XY wafer limit and the Z min / max limit to the devices and
+#: saves ``alox.ini``. Here the stage values apply at the next start (no device is reconfigured) and the autofocus
+#: boundaries at the next autofocus (read at each start); the dialog adds the current Z, "set from the current Z" and Z
+#: moves through the Z device (its software range), on the owner's request (P5). The XY SPEED / Z SPEED rings (speed
+#: of the running devices) are not reproduced.
+_AF = Group("AUTOFOCUS BOUNDARIES", (
+    num("Z MIN AUTOFOCUS", "hardware.z.zminautofocus", 33.0, -1000.0, 1000.0, unit="mm", step=0.01, decimals=4),
+    num("Z MAX AUTOFOCUS", "hardware.z.zmaxautofocus", 34.5, -1000.0, 1000.0, unit="mm", step=0.01, decimals=4)))
+_STAGE_LIMITS = Group("STAGES SETUP & LIMITS", (
+    num("Z MIN STAGE", "hardware.z.zmin", 0.0, -1000.0, 1000.0, unit="mm", step=0.1, decimals=4),
+    num("Z MAX STAGE", "hardware.z.zmax", 20.0, -1000.0, 1000.0, unit="mm", step=0.1, decimals=4),
+    check("XY/WAFER JOYSTICK LIMIT", "hardware.xy.waferlimit", False),
+    num("XY CHECK FREQ.", "hardware.xy.wafercheckfreq", 500, 1, 60_000, unit="ms", step=50)))
+_AXIS = Group("AXIS", (
+    num("X AXIS ID", "hardware.xy.xaxis", 1, 0, 99), num("Y AXIS ID", "hardware.xy.yaxis", 2, 0, 99),
+    num("Z AXIS ID", "hardware.z.zaxis", 1, 0, 99)))
+_SPEEDS = Group("SPEEDS", (
+    num("XY LOW SPEED", "hardware.xy.slowspeed", 1.0, 0.0, 1000.0, unit="mm/s", step=0.5),
+    num("XY HIGH SPEED", "hardware.xy.speed", 10.0, 0.0, 1000.0, unit="mm/s", step=0.5),
+    num("Z LOW SPEED", "hardware.z.slowspeed", 1.0, 0.0, 1000.0, unit="mm/s", step=0.5),
+    num("Z HIGH SPEED", "hardware.z.speed", 10.0, 0.0, 1000.0, unit="mm/s", step=0.5)))
+XYZ_SETUP = PropertiesPage("xyzsetup", "ALOX XYZ STAGES SETUP", PropertiesTab.XYZSTAGES,
+                           (_AF, _STAGE_LIMITS, _AXIS, _SPEEDS), restart=_keys(_STAGE_LIMITS, _AXIS, _SPEEDS),
+                           parent="xyz")
+Z_CHECK_TEXT = ("Please check Z Min. & Max. values for stage & autofocus: Zmin autofocus must be > Zmin stage, "
+                "Zmax autofocus must be < Zmax stage")
+
+
+# ================================================================================================== calibration
+#: REAL-WORLD UNITS of ``alox_calibration_ui`` (texts 000034 / 000035) and the ``units`` code stored (Units Out =
+#: index + 1 of ``alox_typedef_calibration_units``: 0 pixels, 1 µm, 2 mm).
+CALIBRATION_UNITS: tuple[tuple[int, str], ...] = ((1, "MICROMETERS"), (2, "MILLIMETERS"))
+CAMERAS: tuple[tuple[str, str], ...] = (("highmag", "HIGH MAG."), ("lowmag", "LOW MAG."))
+
+
+def pixel_size(real_length: float, pixels: float | None) -> float | None:
+    """PIXEL SIZE (REAL-WORLD) = LENGTH (REAL-WORLD) / LENGTH (PIXELS); None (not VALID) without a line or a
+    positive length."""
+    if pixels is None or not pixels > 0 or not real_length > 0:
+        return None
+    return float(real_length) / float(pixels)
+
+
 # ================================================================================================== model
 @dataclass(frozen=True)
 class StatusLine:
@@ -319,17 +372,34 @@ class SaveResult:
         return not self.errors
 
 
+_FALLBACK_KEYS = {f"user.rights.{u.rights_key}.properties{tab.value}":
+                  f"user.rights.{u.rights_key}.properties{other.value}"
+                  for u in UserType for tab, other in TAB_FALLBACK.items()}
+
+
 class _Store:
-    """``core.properties`` read at each call (the core replaces it at boot), as a :class:`SettingsModel` profile."""
+    """``core.properties`` read at each call (the core replaces it at boot), as a :class:`SettingsModel` profile. A
+    missing tab right with a fallback (pyrometer) reads as the right it falls back to; a whole number written into an
+    ``I32`` / ``U32`` property is written as an integer (some files hold ``slowspeed_I32``)."""
 
     def __init__(self, core: Any) -> None:
         self._core = core
 
     def get(self, dotted: str, default: Any = None) -> Any:
-        return self._core.properties.get(dotted, default)
+        props = self._core.properties
+        value = props.get(dotted, None)
+        if value is None and dotted.lower() in _FALLBACK_KEYS:
+            value = props.get(_FALLBACK_KEYS[dotted.lower()], None)
+        return default if value is None else value
 
     def set(self, dotted: str, value: Any) -> None:
-        self._core.properties.set(dotted, value)
+        props = self._core.properties
+        suffix = getattr(props, "suffix_of", lambda _k: None)(dotted)
+        if suffix in ("I32", "U32") and isinstance(value, float):
+            if value != int(value):
+                raise ValueError(f"{value:g}: {dotted} is an integer property ({suffix})")
+            value = int(value)
+        props.set(dotted, value)
 
     def save(self) -> Path:
         return self._core.properties.save()
@@ -359,11 +429,10 @@ class PropertiesModel:
             return False
 
     def initial_page(self) -> tuple[str, str | None]:
-        """The page shown at opening (frame 1.3): HARDWARE DEVICES / XYZ STAGES when the user is Operator and
-        ``user.rights.admin.propertiesxyzstages`` (as drawn) is TRUE, else STATUS."""
+        """The page shown at opening (frame 1.3): HARDWARE DEVICES / XYZ STAGES when the user is Operator and has the
+        XYZ stages right (the user's own key; LabVIEW read the admin's: owner P2), else STATUS."""
         users = self.core.users
-        xyz = bool(users.has_tab_right(PropertiesTab.XYZSTAGES, UserType.ADMIN))
-        if users.current is UserType.OPERATOR and xyz:
+        if users.current is UserType.OPERATOR and self.allowed(XYZ):
             return HARDWARE.key, XYZ.key
         return STATUS.key, None
 
@@ -452,6 +521,53 @@ class PropertiesModel:
             found.append((name, str(getattr(state, "name", state) or "-")))
         return found
 
+    # -- calibration (CAMERA page, alox_calibration_ui)
+    def calibration(self, camera: str) -> tuple[float, int]:
+        """The stored calibration of ``camera``: ``hardware.camera.<camera>.pixelsize`` and ``units`` (0 pixels,
+        1 µm, 2 mm)."""
+        props = self.core.properties
+        try:
+            size = float(props.get(f"hardware.camera.{camera}.pixelsize", 1.0))
+            units = int(props.get(f"hardware.camera.{camera}.units", 0))
+        except (TypeError, ValueError):
+            return 1.0, 0
+        return size, units
+
+    def store_calibration(self, camera: str, size: float, units: int) -> str | None:
+        """OK of ``alox_calibration_ui`` then calibration "Set Calib" + "Set To Properties": the pixel size and units
+        of ``camera`` into ``alox.ini`` (saved); used by the functions from their next run. Returns the refusal."""
+        if camera not in dict(CAMERAS):
+            return f"unknown camera {camera!r}"
+        if not self.allowed(CAMERA):
+            return "calibration: not allowed for this user"
+        if not (size > 0) or units not in dict(CALIBRATION_UNITS):
+            return "invalid calibration"
+        try:
+            self.store.set(f"hardware.camera.{camera}.pixelsize", float(size))
+            self.store.set(f"hardware.camera.{camera}.units", int(units))
+            self.save_file()
+        except (OSError, TypeError, ValueError) as exc:
+            return f"calibration not saved: {exc}"
+        self.core.log.info(f"Calibration {camera}: {size:g} {dict(CALIBRATION_UNITS)[units].lower()} per pixel")
+        return None
+
+    def camera_image(self, camera: str) -> tuple[int, Any]:
+        """``(images stored for camera, its last image)`` of the image store (None without one)."""
+        images = getattr(self.core, "images", None)
+        if images is None:
+            return 0, None
+        count, _stamp = images.image_info(camera)
+        return count, images.last(camera)
+
+    # -- XYZ setup (XYZ STAGES page, alox_xyz_stages_ui)
+    def xyz_setup_allowed(self) -> bool:
+        """XYZ SETUP: the XYZ stages right, not for Operator (``alox_properties_ui`` frame 1: XYZ_SETUP "Disabled and
+        Grayed Out" in the Operator case)."""
+        return self.allowed(XYZ) and self.core.users.current is not UserType.OPERATOR
+
+    def xyz_setup(self) -> XyzSetupModel:
+        return XyzSetupModel(self)
+
     # -- ADMIN
     def change_password(self, user: UserType | int | str, password: str, confirm: str) -> str | None:
         """``alox_change_password_ui`` OK: NEW PASSWORD = CONFIRM PASSWORD → ``user.password.<user>`` = Base64 of
@@ -481,3 +597,92 @@ class PropertiesModel:
         shutil.copyfile(source, target)
         return target
 
+
+
+class XyzSetupModel:
+    """The XYZ setup dialog (:data:`XYZ_SETUP`) on the properties store, and its Z moves. Every move is an explicit
+    call (a button) and goes through the Z device (``move_absolute`` / ``move_relative``: reference and software range
+    checks); nothing moves otherwise."""
+
+    TIMEOUT_S = 60.0
+
+    def __init__(self, panel: PropertiesModel) -> None:
+        self.panel = panel
+        self.core = panel.core
+        self.settings = SettingsModel(XYZ_SETUP.spec(), panel.store, allowed=panel.xyz_setup_allowed)
+
+    @property
+    def allowed(self) -> bool:
+        return self.panel.xyz_setup_allowed()
+
+    def problem(self) -> str | None:
+        """The check of OK: Z MIN STAGE < Z MIN AUTOFOCUS < Z MAX AUTOFOCUS < Z MAX STAGE."""
+        v = self.settings.value
+        z_min, z_max = v("hardware.z.zmin"), v("hardware.z.zmax")
+        af_min, af_max = v("hardware.z.zminautofocus"), v("hardware.z.zmaxautofocus")
+        if not (z_min < af_min < af_max < z_max):
+            return Z_CHECK_TEXT
+        return None
+
+    def save(self) -> SaveResult:
+        """OK: the check, the keys into the store, then ``alox.ini``."""
+        problem = self.problem()
+        if problem is not None:
+            return SaveResult(errors={"": problem})
+        result = self.settings.apply()
+        if not result.ok:
+            return SaveResult(result.written, result.errors)
+        try:
+            saved = self.panel.save_file()
+        except (OSError, ValueError) as exc:
+            return SaveResult(result.written, {"": f"alox.ini not saved: {exc}"})
+        if result.written:
+            self.core.log.info("XYZ Setup: " + ", ".join(result.written))
+        return SaveResult(result.written, {}, saved, tuple(k for k in result.written if k in XYZ_SETUP.restart))
+
+    # -- Z
+    def _z(self) -> Any:
+        from alox.devices.base import DeviceState
+
+        z = self.core.devices.get("z")
+        if z is None or z.state != DeviceState.READY:
+            raise ValueError("Z stage not ready")
+        return z
+
+    def z_limits(self) -> tuple[float, float] | None:
+        """The software range of the Z device (None without it)."""
+        z = self.core.devices.get("z")
+        limits = getattr(z, "limits", None)
+        return None if limits is None else (float(limits[0]), float(limits[1]))
+
+    def z_position(self) -> float:
+        """CURRENT Z (mm) ("Get Position"). :class:`ValueError` / ``DeviceError`` when not ready."""
+        return float(self._z().position(timeout=self.TIMEOUT_S))
+
+    def set_from_current(self, key: str) -> str | None:
+        """Z MIN / MAX AUTOFOCUS = the current Z (a pending edit); returns the refusal."""
+        if key not in ("hardware.z.zminautofocus", "hardware.z.zmaxautofocus"):
+            raise KeyError(key)
+        if not self.allowed:
+            return "XYZ setup: not allowed for this user"
+        try:
+            position = self.z_position()
+        except Exception as exc:                          # noqa: BLE001 - device errors are reported
+            return f"current Z: {exc}"
+        return self.settings.set(key, round(position, 4))
+
+    def move_z(self, target_mm: float) -> float:
+        """MOVE Z: absolute move (waits for the end); returns the position reached. Refused without the right."""
+        if not self.allowed:
+            raise ValueError("XYZ setup: not allowed for this user")
+        reached = self._z().move_absolute(float(target_mm), wait=True, timeout=self.TIMEOUT_S)
+        self.core.log.info(f"XYZ Setup: Z move to {float(target_mm):.4f} mm")
+        return float(reached)
+
+    def jog_z(self, delta_mm: float) -> float:
+        """Z − / Z +: relative move of ``delta_mm`` (waits for the end); returns the position reached."""
+        if not self.allowed:
+            raise ValueError("XYZ setup: not allowed for this user")
+        reached = self._z().move_relative(float(delta_mm), wait=True, timeout=self.TIMEOUT_S)
+        self.core.log.info(f"XYZ Setup: Z jog {float(delta_mm):+.4f} mm")
+        return float(reached)

@@ -131,7 +131,7 @@ class FieldForm:
         return f.caption
 
     def _group(self, group: Group, columns: int = _COLUMNS) -> QGroupBox:
-        box = QGroupBox(group.title)
+        box = QGroupBox(group.title.replace("&", "&&"))            # "&" is not a mnemonic
         grid = QGridLayout(box)
         grid.setContentsMargins(2, 0, 2, 0)
         grid.setHorizontalSpacing(10)
