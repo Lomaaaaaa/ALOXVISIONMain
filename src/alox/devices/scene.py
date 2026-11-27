@@ -39,7 +39,7 @@ gain, aperture to 10 nm), otherwise only the noise is new. Deterministic for a g
 ``[simulation.scene]``, ``demo.ini`` the recipe)::
 
     python -m alox.devices.scene --make-demo /tmp/alox-demo       # folders, settings, the DEMO profile, the models
-    alox --simulate --setup-ini /tmp/alox-demo/alox_setup.ini     # REST 8002, websocket 6123 (add --ui for the window)
+    alox --simulate --setup-ini /tmp/alox-demo/alox_setup.ini     # REST 8001, websocket 6123 (add --ui for the window)
 
 then post the supervisor jobs (``PUT /alox/v1/functions/measuretilt``, ``measuremesa?singleshot=true``,
 ``measurebowing``; the jobs move the stage), or use the window's buttons (``--ui``; the demo's operator has every

@@ -11,7 +11,7 @@ dependencies = ["numpy>=1.24", "scipy>=1.10", "pillow>=10"]   # scipy: circle an
 
 [project.optional-dependencies]
 stage = ["pyserial>=3.5"]         # the PI stages (Z, XY); pipython is not used
-api = ["fastapi>=0.110", "uvicorn>=0.29", "websockets>=12"]   # REST (8002) and websocket (6123) for the supervisor
+api = ["fastapi>=0.110", "uvicorn>=0.29", "websockets>=12"]   # REST (8001) and websocket (6123) for the supervisor
 ui = ["PySide6>=6.6"]             # the operator window (alox.ui; python -m alox.ui)
 licence = ["cryptography>=42"]       # the signed licence file (alox.licence), only when the check is enabled
 vision = ["opencv-python-headless>=4.8"]   # alox.vision.matching: the OpenCV pattern matcher (NumPy fallback without)

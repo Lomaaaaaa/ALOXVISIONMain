@@ -157,5 +157,5 @@ use synthetic equivalents).
 | R15 | `Gain_DBL` (High Mag 2, Low Mag 0) is the base gain; `gain_STR` is the attribute path. Low Mag 0 is coerced to 1 | No change |
 | — | Refocus Fin ROI 1299 × 2000 needs cameras at least 2000 px high (2448 × 2048); the Low Mag ROI `[1299, 2000, W, H]` is a 48-px strip there, as in LabVIEW (Q21) | Kept as LabVIEW |
 | — | One file names the High Mag camera "LowMagg" and the Low Mag "HighMag" (both USB) | Owner: a test file; no change |
-| — | `[webservice] port_I32 = 8001`; the application's REST API listens on 8002 (`--rest-port`) | Owner checks which port the supervisor calls |
+| — | `[webservice] port_I32 = 8001`; the application's REST API listened on 8002 | Owner: the supervisor calls 8001. Done: the REST and websocket ports are read from `alox.ini` `[webservice] port` / `[websocket] port` (defaults 8001 / 6123; `--rest-port` / `--ws-port` override) |
 | — | All recipe keys are read except the Get Image display keys, the unused Blobs keys (`detect.vcsel.binary*`, …), and the autofocus/refocus window and overlay switches | As designed |

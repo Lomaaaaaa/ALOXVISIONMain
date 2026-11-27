@@ -106,7 +106,7 @@ needs no hardware and no network port and can be started at any time.
 2. **`alox.exe --check --alox-ini <settings>\alox.ini`** in the Command Prompt (`<settings>` of `alox_setup.ini`):
    opens the devices with the machine's settings, prints their status as JSON, exit code 0 when all are ready.
 3. **`alox.exe --ui`** (or the *Alox Vision* shortcut): the whole application with the operator window; the supervisor
-   API on ports 8002 (REST) and 6123 (websocket), as LabVIEW.
+   API on the ports of `alox.ini` `[webservice] port` (REST, default 8001) and `[websocket] port` (default 6123).
 4. Close it, start LabVIEW again.
 
 ## Updating and rolling back

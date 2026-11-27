@@ -18,7 +18,7 @@ This plan turns the [map](map.md) into a route for rewriting the whole ALOX Visi
 - **Order:** device layer first (Z, XY, monochromator, cameras), each with a simulator and a check tool run on the real
   machine; then the core and its API, headless; then the algorithms and the measurement functions; then the operator UI;
   then side-by-side test sessions on a machine, a parallel run, and the cutover machine by machine.
-- **Compatibility:** the supervisor contract (REST port 8002, websocket 6123) and the files on disk (INI files, zip recipes,
+- **Compatibility:** the supervisor contract (REST port from `alox.ini [webservice] port`, 8001 on the machines; websocket 6123) and the files on disk (INI files, zip recipes,
   folders, job history, image files) stay compatible, except for the defects the owner decided to fix
   ([map §3.1](map.md#31-owners-answers-on-the-defects-25112026)). File compatibility makes rollback simple: start the
   LabVIEW version again.
@@ -167,7 +167,7 @@ they no longer run "inside the camera server".
 | `alox.devices` | Device actor framework and the device modules of section 3.3 (Z moved from `aloxcam.zstage`) |
 | `alox.vision` | Algorithms: focus metrics (moved from `aloxcam.imaging`), geometry and diameter fits, bowing/tilt/recentring formulas, wavelength/exposure interpolation, matching and edge tools behind interfaces |
 | `alox.core` | Settings (NI INI reader from `aloxcam.config`), folders, users, recipes, status IDs and translations, event log, command and event buses, function runner, measurement functions, thermal tool |
-| `alox.api` | REST (8002) and websocket (6123) |
+| `alox.api` | REST (`[webservice] port`, 8001) and websocket (6123) |
 | `alox.ui` | Qt (PySide6) operator and engineering UI |
 | `aloxcam` | Kept as reference and test tooling: LabVIEW flattening, TCP wire format, the camera server, capture extraction and replay tools |
 
@@ -252,7 +252,7 @@ Phases 4, 5 and 6 are independent and can run in parallel. Phases 7 to 9 can sta
 | "RANSAC" line fit | Fix (all orientations, real inlier count) | Owner |
 | XY silent re-homing | Keep, but log and report it | Owner |
 | XY wafer-limit loop without lock | Fix (the XY device owns the link) | Map Part 2 |
-| Ports and folders | Values in effect today: REST 8002, websocket 6123, folders from `alox_setup.ini` (the WL port no longer exists) | Owner |
+| Ports and folders | REST from `alox.ini [webservice] port` (owner 2026-11-27: the supervisor calls 8001), websocket 6123, folders from `alox_setup.ini` (the WL port no longer exists) | Owner |
 | File names with one-second resolution (same-second overwrite) | Decide: keep names (other tools may read them) or add milliseconds | Map Part 4 |
 | Passwords stored Base64 in `alox.ini` | Owner's decision 5 (recommendation: hashed, with a migration on first login) | Map Part 1 |
 | Camera and Z behaviour (flat field, flip, LEDs, autofocus/refocus, Z macros) | As decided in `docs/10` §6 and `docs/answers/`; decisions about the TCP protocol no longer apply | Camera server spec |

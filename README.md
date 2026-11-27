@@ -25,7 +25,7 @@ phase").
 
 The package `alox` is the new Vision Core application: one process with the devices (Z stage, XY stages on the C-663
 daisy chain, monochromator, two GenICam cameras), the core (settings, recipes, statuses, command queue, measurement
-functions, hardware supervision) and the supervisor API (REST on port 8002, websocket events on port 6123, the same
+functions, hardware supervision) and the supervisor API (REST on `alox.ini [webservice] port`, 8001 by default; websocket events on `[websocket] port`, 6123; the same
 routes and JSON as LabVIEW). The plan and its progress are in
 [`docs/vision-core/migration-plan.md`](docs/vision-core/migration-plan.md); the questions waiting for the owner are in
 [`docs/vision-core/questions.md`](docs/vision-core/questions.md).

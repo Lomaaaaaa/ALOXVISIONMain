@@ -117,3 +117,23 @@ def test_whole_application_serves_the_api_in_simulation(tmp_path: Path):
             assert httpx.put(f"{base}/system/shutdown").status_code == 200
             assert app.exit_requested.wait(5)
     assert app.core is not None and app.core.system.code == 800
+
+
+def test_api_ports_come_from_the_command_line_then_alox_ini_then_8001_6123():
+    """Owner (2026-11-27): the supervisor calls 8001, the ``[webservice] port`` of the machines' alox.ini."""
+    from types import SimpleNamespace
+
+    from alox.app import REST_PORT, WS_PORT, _parser
+    from alox.core.properties import Properties
+
+    def ports(text: str, **given: int) -> tuple[int, int]:
+        app = SimpleNamespace(core=SimpleNamespace(properties=Properties.parse(text)), config=AppConfig(**given))
+        return Application.api_ports(app)                                # type: ignore[arg-type]
+
+    assert (REST_PORT, WS_PORT) == (8001, 6123)
+    assert ports("") == (8001, 6123)
+    assert ports("[webservice]\nport_I32 = 8003\n[websocket]\nport_I32 = 6200\n") == (8003, 6200)
+    assert ports("[webservice]\nport_I32 = 8003\n", rest_port=9000, ws_port=0) == (9000, 0)
+    assert ports("[webservice]\nport_I32 = 70000\n") == (8001, 6123)            # not a port: the default
+    args = _parser().parse_args([])
+    assert args.rest_port is None and args.ws_port is None

@@ -1,14 +1,14 @@
 """Entry point of the integrated ALOX Vision Core application.
 
 The application container (``docs/vision-core/phase3-skeleton.md``): the event bus, the devices (the Z stage, the XY
-stages, the monochromator and the two cameras), the core (:mod:`alox.core.core`) and the supervisor API (REST on 8002,
-websocket on 6123). The measurement functions and the UI are added phase by phase.
+stages, the monochromator and the two cameras), the core (:mod:`alox.core.core`) and the supervisor API (REST on
+``alox.ini [webservice] port``, default 8001; websocket on ``[websocket] port``, default 6123). The measurement functions and the UI are added phase by phase.
 
 Command line::
 
     alox [--setup-ini PATH] [--settings-dir DIR] [--alox-ini PATH] [--simulate]
          [--port-map COM2=socket://127.0.0.1:50000] [--no-reference] [--devices z,xy,wl,highmag,lowmag]
-         [--rest-port 8002] [--ws-port 6123] [--host 0.0.0.0] [--no-api] [--ui]
+         [--rest-port PORT] [--ws-port PORT] [--host 0.0.0.0] [--no-api] [--ui]
          [--log-dir DIR] [--log-level LEVEL] [--check]
 
 Without ``--check`` the whole application runs (folders from ``alox_setup.ini``, settings in ``<settings>/alox.ini``)
@@ -56,9 +56,13 @@ from aloxcam.settings import (
     StageOptions,
 )
 
-__all__ = ["AppConfig", "Application", "main"]
+__all__ = ["REST_PORT", "WS_PORT", "AppConfig", "Application", "main"]
 
 log = logging.getLogger("alox")
+
+#: The supervisor API ports when neither the command line nor alox.ini gives them (owner: the supervisor calls 8001).
+REST_PORT = 8001
+WS_PORT = 6123
 
 
 @dataclass(frozen=True)
@@ -85,8 +89,8 @@ class AppConfig:
     settings_dir: Path | None = None
     api: bool = True
     host: str = "0.0.0.0"
-    rest_port: int = 8002
-    ws_port: int = 6123
+    rest_port: int | None = None             # None: alox.ini [webservice] port (default REST_PORT)
+    ws_port: int | None = None               # None: alox.ini [websocket] port (default WS_PORT)
 
 
 class _UnavailableCameras(CameraBackend):
@@ -293,13 +297,35 @@ class Application:
 
         assert self.core is not None
         self.core.system.set(SystemCode.INIT_WEB_SERVER)
-        self.websocket = WebsocketServer(self.events, host=self.config.host, port=self.config.ws_port)
+        rest_port, ws_port = self.api_ports()
+        self.websocket = WebsocketServer(self.events, host=self.config.host, port=ws_port)
         self.websocket.start()
-        self.rest = _RestServer(create_app(self.core, websocket_port=self.websocket.port), self.config.host,
-                                self.config.rest_port)
+        self.rest = _RestServer(create_app(self.core, websocket_port=self.websocket.port), self.config.host, rest_port)
         self.rest.start()
         self.core.system.set(SystemCode.INIT_WEBSOCKET)
         log.info("API: REST on port %d, websocket on port %d", self.rest.port, self.websocket.port)
+
+    def api_ports(self) -> tuple[int, int]:
+        """The REST and websocket ports: the command line's, else ``alox.ini [webservice] port`` and ``[websocket]
+        port`` (owner: the supervisor calls 8001, the value of the machines' alox.ini; LabVIEW V1.2.6.2 ignored the key
+        and served on its build setting 8002), else :data:`REST_PORT` / :data:`WS_PORT`."""
+        props = self.core.properties if self.core is not None else None
+
+        def port(given: int | None, key: str, default: int) -> int:
+            if given is not None:
+                return given
+            try:
+                value = int(props.get(key, default)) if props is not None else default
+            except (TypeError, ValueError, LookupError):
+                log.warning("alox.ini %s is not a port: %d used", key, default)
+                return default
+            if not 0 <= value <= 65535:
+                log.warning("alox.ini %s = %d is not a port: %d used", key, value, default)
+                return default
+            return value
+
+        return port(self.config.rest_port, "webservice.port", REST_PORT), port(self.config.ws_port, "websocket.port",
+                                                                                WS_PORT)
 
     @staticmethod
     def _open_timeout(device: Device) -> float:
@@ -368,8 +394,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--log-dir", type=Path, help="also write the log to daily files in this folder")
     p.add_argument("--log-level", default="INFO", help="DEBUG, INFO, WARNING, ERROR (default INFO)")
     p.add_argument("--host", default="0.0.0.0", help="address the API listens on (default 0.0.0.0)")
-    p.add_argument("--rest-port", type=int, default=8002, help="REST API port (default 8002)")
-    p.add_argument("--ws-port", type=int, default=6123, help="websocket events port (default 6123)")
+    p.add_argument("--rest-port", type=int, help=f"REST API port (default: alox.ini [webservice] port, else {REST_PORT})")
+    p.add_argument("--ws-port", type=int, help=f"websocket events port (default: alox.ini [websocket] port, else {WS_PORT})")
     p.add_argument("--no-api", action="store_true", help="run without the REST and websocket servers")
     p.add_argument("--ui", action="store_true", help="show the operator window (needs PySide6: pip install -e .[ui])")
     p.add_argument("--theme", choices=("light", "dark"), help="with --ui: the window theme (default: the last chosen)")

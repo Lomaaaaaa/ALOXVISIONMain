@@ -1,1 +1,1 @@
-"""The supervisor interfaces: REST API (port 8002) and websocket events (port 6123)."""
+"""The supervisor interfaces: REST API (alox.ini [webservice] port, default 8001) and websocket events ([websocket] port, default 6123)."""
