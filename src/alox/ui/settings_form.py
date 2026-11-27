@@ -3,7 +3,9 @@
 Layout as the LabVIEW ``_ui_config`` panels: the title, the selector when the panel has one (Get Image: CAMERA),
 the LabVIEW tabs (SETTINGS, DISPLAY, ...) with their titled groups, the groups shown under the tabs, then a status
 line and APPLY / SAVE / CANCEL / CLOSE. Numbers are spin boxes limited to the field's range, Booleans check boxes,
-rings combo boxes with the LabVIEW item texts, paths a line with a browse button. Every edit goes through the
+rings combo boxes with the LabVIEW item texts, paths a line with a browse button, strings a line, colours a line with
+a colour chooser. :class:`FieldForm` builds the groups (also used by the properties panel,
+:mod:`alox.ui.properties_form`). Every edit goes through the
 :class:`~alox.ui.settings_panels.SettingsModel` (validation); the inputs and APPLY / SAVE / CANCEL are enabled only
 with the panel's right (:meth:`SettingsPanel.refresh_rights`).
 """
@@ -14,8 +16,10 @@ from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -37,7 +41,7 @@ from PySide6.QtWidgets import (
 from alox.ui import theme
 from alox.ui.settings_panels import ApplyResult, Field, Group, Kind, SettingsModel
 
-__all__ = ["SettingsPanel"]
+__all__ = ["FieldForm", "SettingsPanel"]
 
 _COLUMNS = 2                       # label/input pairs per row of a group
 _INT_LIMIT = 2_147_483_647
@@ -78,7 +82,129 @@ class _PathEdit(QWidget):
         self.line.setText(text)
 
 
-class SettingsPanel(QFrame):
+class _ColourEdit(QWidget):
+    """A colour control: the ``RRGGBB`` text and a swatch button that opens the colour chooser."""
+
+    def __init__(self, f: Field, on_change: Callable[[str], None]) -> None:
+        super().__init__()
+        self.field = f
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.line = QLineEdit()
+        self.line.setMaxLength(7)
+        self.line.editingFinished.connect(lambda: on_change(self.line.text()))
+        self.swatch = QToolButton()
+        self.swatch.setToolTip(f"Choose the {f.label.lower()}")
+        self.swatch.setFixedWidth(28)
+        self.swatch.clicked.connect(lambda _c=False: self._choose(on_change))
+        layout.addWidget(self.line, 1)
+        layout.addWidget(self.swatch)
+
+    def _choose(self, on_change: Callable[[str], None]) -> None:
+        chosen = QColorDialog.getColor(QColor("#" + self.line.text().lstrip("#")), self, self.field.label)
+        if chosen.isValid():
+            self.setText(chosen.name()[1:].upper())
+            on_change(self.line.text())
+
+    def text(self) -> str:
+        return self.line.text()
+
+    def setText(self, text: str) -> None:
+        self.line.setText(text)
+        colour = QColor("#" + text.lstrip("#"))
+        self.swatch.setStyleSheet(f"QToolButton {{ background: {colour.name()}; }}" if colour.isValid() else "")
+
+
+class FieldForm:
+    """Builds the titled groups of fields of a form and shows values in them. The class using it holds ``inputs``
+    and ``labels`` (key template → widget) and implements ``_edit(key, value)``; ``_caption(field)`` gives the
+    caption of a field (default: label and unit)."""
+
+    inputs: dict[str, QWidget]
+    labels: dict[str, QLabel]
+
+    def _edit(self, key: str, value: Any) -> None:
+        raise NotImplementedError
+
+    def _caption(self, f: Field) -> str:
+        return f.caption
+
+    def _group(self, group: Group, columns: int = _COLUMNS) -> QGroupBox:
+        box = QGroupBox(group.title)
+        grid = QGridLayout(box)
+        grid.setContentsMargins(2, 0, 2, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
+        for index, f in enumerate(group.fields):
+            line, pair = divmod(index, columns)
+            label = QLabel(self._caption(f))
+            label.setProperty("role", "field")
+            widget = self._input(f)
+            grid.addWidget(label, line, 2 * pair)
+            grid.addWidget(widget, line, 2 * pair + 1)
+            self.labels[f.key] = label
+            self.inputs[f.key] = widget
+        for pair in range(columns):
+            grid.setColumnStretch(2 * pair + 1, 1)
+            if pair:
+                grid.setColumnMinimumWidth(2 * pair, 120)
+        return box
+
+    def _input(self, f: Field) -> QWidget:
+        key = f.key
+        if f.kind is Kind.CHECK:
+            box = QCheckBox()
+            box.toggled.connect(lambda on, k=key: self._edit(k, bool(on)))
+            return box
+        if f.kind is Kind.ENUM:
+            combo = QComboBox()
+            for code, text in f.items:
+                combo.addItem(text, code)
+            combo.currentIndexChanged.connect(lambda _i, k=key, c=combo: self._edit(k, c.currentData()))
+            return combo
+        if f.kind is Kind.PATH:
+            return _PathEdit(f, lambda text, k=key: self._edit(k, text))
+        if f.kind is Kind.COLOUR:
+            return _ColourEdit(f, lambda text, k=key: self._edit(k, text))
+        if f.kind is Kind.TEXT:
+            line = QLineEdit()
+            line.editingFinished.connect(lambda k=key, w=line: self._edit(k, w.text()))
+            return line
+        spin: QSpinBox | QDoubleSpinBox
+        if f.integer:
+            spin = QSpinBox()
+            spin.setRange(int(max(f.minimum or 0, -_INT_LIMIT)), int(min(f.maximum or 0, _INT_LIMIT)))
+            spin.setSingleStep(max(1, int(f.step)))
+        else:
+            spin = QDoubleSpinBox()
+            spin.setDecimals(f.decimals)
+            spin.setRange(float(f.minimum or 0.0), float(f.maximum or 0.0))
+            spin.setSingleStep(f.step)
+        spin.setKeyboardTracking(False)
+        spin.setAlignment(Qt.AlignmentFlag.AlignRight)
+        if f.unit:
+            spin.setToolTip(f"{f.caption}: {f.minimum:g} … {f.maximum:g}")
+        spin.valueChanged.connect(lambda value, k=key: self._edit(k, value))
+        return spin
+
+    @staticmethod
+    def _show(f: Field, widget: QWidget, value: Any) -> None:
+        if isinstance(widget, QCheckBox):
+            widget.setChecked(bool(value))
+        elif isinstance(widget, QComboBox):
+            index = widget.findData(value)
+            if index < 0:                                         # a code the ring does not have
+                widget.addItem(f"{value} (unknown)", value)
+                index = widget.count() - 1
+            widget.setCurrentIndex(index)
+        elif isinstance(widget, (_PathEdit, _ColourEdit, QLineEdit)):
+            widget.setText(str(value))
+        elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+            widget.setValue(value)                                # type: ignore[arg-type]
+
+
+class SettingsPanel(FieldForm, QFrame):
     """One function settings panel on ``model``. ``on_close()`` is called by CLOSE; ``running()`` tells whether the
     function runs (the status line then says that the changes apply to its next run); ``confirm(question)`` asks
     before CLOSE drops pending edits."""
@@ -163,57 +289,14 @@ class SettingsPanel(QFrame):
         scroll.setWidget(inner)
         return scroll
 
-    def _group(self, group: Group) -> QGroupBox:
-        box = QGroupBox(group.title)
-        grid = QGridLayout(box)
-        grid.setContentsMargins(2, 0, 2, 0)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(6)
-        for index, f in enumerate(group.fields):
-            line, pair = divmod(index, _COLUMNS)
-            label = QLabel(f.caption)
-            label.setProperty("role", "field")
-            widget = self._input(f)
-            grid.addWidget(label, line, 2 * pair)
-            grid.addWidget(widget, line, 2 * pair + 1)
-            self.labels[f.key] = label
-            self.inputs[f.key] = widget
-        for pair in range(_COLUMNS):
-            grid.setColumnStretch(2 * pair + 1, 1)
-            if pair:
-                grid.setColumnMinimumWidth(2 * pair, 120)
-        return box
+    @property
+    def panel_name(self) -> str:
+        """The panel name (``alox_manager_panels``; the caption of the SETTINGS tab)."""
+        return self.spec.name
 
-    def _input(self, f: Field) -> QWidget:
-        key = f.key
-        if f.kind is Kind.CHECK:
-            box = QCheckBox()
-            box.toggled.connect(lambda on, k=key: self._edit(k, bool(on)))
-            return box
-        if f.kind is Kind.ENUM:
-            combo = QComboBox()
-            for code, text in f.items:
-                combo.addItem(text, code)
-            combo.currentIndexChanged.connect(lambda _i, k=key, c=combo: self._edit(k, c.currentData()))
-            return combo
-        if f.kind is Kind.PATH:
-            return _PathEdit(f, lambda text, k=key: self._edit(k, text))
-        spin: QSpinBox | QDoubleSpinBox
-        if f.integer:
-            spin = QSpinBox()
-            spin.setRange(int(max(f.minimum or 0, -_INT_LIMIT)), int(min(f.maximum or 0, _INT_LIMIT)))
-            spin.setSingleStep(max(1, int(f.step)))
-        else:
-            spin = QDoubleSpinBox()
-            spin.setDecimals(f.decimals)
-            spin.setRange(float(f.minimum or 0.0), float(f.maximum or 0.0))
-            spin.setSingleStep(f.step)
-        spin.setKeyboardTracking(False)
-        spin.setAlignment(Qt.AlignmentFlag.AlignRight)
-        if f.unit:
-            spin.setToolTip(f"{f.caption}: {f.minimum:g} … {f.maximum:g}")
-        spin.valueChanged.connect(lambda value, k=key: self._edit(k, value))
-        return spin
+    @property
+    def dirty(self) -> bool:
+        return self.model.dirty
 
     # ============================================================================================== values
     def refresh(self) -> None:
@@ -229,21 +312,6 @@ class SettingsPanel(QFrame):
             self._loading = False
         self.refresh_rights()
         self._status()
-
-    @staticmethod
-    def _show(f: Field, widget: QWidget, value: Any) -> None:
-        if isinstance(widget, QCheckBox):
-            widget.setChecked(bool(value))
-        elif isinstance(widget, QComboBox):
-            index = widget.findData(value)
-            if index < 0:                                         # a code the ring does not have
-                widget.addItem(f"{value} (unknown)", value)
-                index = widget.count() - 1
-            widget.setCurrentIndex(index)
-        elif isinstance(widget, _PathEdit):
-            widget.setText(str(value))
-        elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
-            widget.setValue(value)                                # type: ignore[arg-type]
 
     def refresh_rights(self) -> None:
         """Enable the inputs and APPLY / SAVE / CANCEL with the right of the current user (``User Rights``)."""

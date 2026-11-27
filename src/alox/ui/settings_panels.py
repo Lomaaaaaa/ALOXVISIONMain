@@ -39,24 +39,29 @@ from typing import Any, Protocol
 from alox.core.users import UserAction
 
 __all__ = ["PANELS", "ApplyResult", "Field", "Group", "Kind", "Page", "PanelSpec", "ProfileAccess", "Selector",
-           "SettingsModel", "panel_by_name", "panel_for"]
+           "SettingsModel", "check", "colour", "colour_text", "num", "panel_by_name", "panel_for", "path", "ring",
+           "text"]
 
 
 # ================================================================================================== description
 class Kind(Enum):
-    """The LabVIEW control of a field: numeric (I32/U32/DBL), Boolean (switch, check box), ring/enum, path."""
+    """The LabVIEW control of a field: numeric (I32/U32/DBL), Boolean (switch, check box), ring/enum, path, string,
+    colour (a LabVIEW colour box stored as the ``RRGGBB`` text of ``tools_color_to_string``)."""
 
     NUMBER = "number"
     CHECK = "check"
     ENUM = "enum"
     PATH = "path"
+    TEXT = "text"
+    COLOUR = "colour"
 
 
 @dataclass(frozen=True)
 class Field:
     """One control: ``key`` is the profile key (``{name}`` is replaced by the panel's :class:`Selector` value).
     Numbers: ``integer`` (I32/U32) or a DBL with ``decimals``; ``minimum``/``maximum`` (inclusive) and ``step``.
-    Enums: ``items`` = (code, LabVIEW item text). Paths: ``directory`` for a folder."""
+    Enums: ``items`` = (code, LabVIEW item text); the codes are integers, or numbers for a ring of values (WAFER
+    SIZE: 76.2, 100, 150). Paths: ``directory`` for a folder."""
 
     label: str
     key: str
@@ -94,16 +99,21 @@ class Field:
             if isinstance(value, (bool, int, float)):
                 return bool(value)
             raise ValueError(f"{self.label}: not a Boolean: {value!r}")
-        if self.kind is Kind.PATH:
+        if self.kind in (Kind.PATH, Kind.TEXT):
             if value is None:
                 return ""
             return str(value)
+        if self.kind is Kind.COLOUR:
+            return colour_text(value, self.label)
         if self.kind is Kind.ENUM:
             if isinstance(value, str):
                 for code, text in self.items:
                     if value.strip().lower() == text.lower():
                         return code
             number = _number(value, self.label)
+            for code, _text in self.items:
+                if isinstance(code, float) and number == code:
+                    return code
             if number != int(number):
                 raise ValueError(f"{self.label}: not an item code: {value!r}")
             return int(number)
@@ -132,6 +142,21 @@ class Field:
         if problem is not None:
             raise ValueError(problem)
         return converted
+
+
+def colour_text(value: Any, label: str = "colour") -> str:
+    """A colour as ``alox.ini`` stores it (``overlays.fontcolor_STR = "3399FF"``): six upper-case hex digits; also
+    accepts ``#3399ff`` and a ``0xRRGGBB`` number (:class:`ValueError` otherwise)."""
+    if isinstance(value, bool):
+        raise ValueError(f"{label}: not a colour: {value!r}")              # noqa: TRY004 - caught as ValueError
+    if isinstance(value, int):
+        if not 0 <= value <= 0xFFFFFF:
+            raise ValueError(f"{label}: not a colour: {value!r}")
+        return f"{value:06X}"
+    text = str(value).strip().lstrip("#")
+    if len(text) != 6 or any(c not in "0123456789abcdefABCDEF" for c in text):
+        raise ValueError(f"{label}: not a colour (RRGGBB): {value!r}")
+    return text.upper()
 
 
 def _number(value: Any, label: str) -> float:
@@ -236,6 +261,14 @@ def ring(label: str, key: str, default: int, *texts: str) -> Field:
 
 def path(label: str, key: str, *, directory: bool = False) -> Field:
     return Field(label, key, Kind.PATH, "", directory=directory)
+
+
+def text(label: str, key: str, default: str = "") -> Field:
+    return Field(label, key, Kind.TEXT, default)
+
+
+def colour(label: str, key: str, default: str) -> Field:
+    return Field(label, key, Kind.COLOUR, colour_text(default, label))
 
 
 def _from_profile(module: str, cls: str) -> Reader:

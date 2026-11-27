@@ -229,7 +229,7 @@ side-by-side test session on a machine.
 | 9 | `alox.vision`: formulas, focus, geometry and diameters, edge and shape tools, `Matcher` (NI C API first) | L | **Code done** (formulas, focus metrics, exact roundness fits, edge tools, Matcher: OpenCV + NumPy, NI C API skeleton); each algorithm matches LabVIEW's results on a recorded dataset within agreed tolerances | Dataset: images plus LabVIEW results for each function |
 | 10 | Functions: focus jobs (autofocus/refocus, `docs/06`–`07`), then the low-level functions, then high-level mesa, bowing, tilt; job history files | XL | **Code done** (all 13 functions, job files; validation on recorded data pending); full jobs in test sessions give the same results and files as LabVIEW | Which functions are used in production |
 | **M2** | **Headless application runs complete supervisor jobs on a real machine** | | Same results as LabVIEW on the same samples | Test slots |
-| 11 | Qt UI: production panels first, then engineering and device panels | XL | **Started** (main window); operators and engineers accept it on a test machine | UI review sessions |
+| 11 | Qt UI: production panels first, then engineering and device panels | XL | **Started** (main window, function settings panels, results panels, properties panel "Vision Core": `alox.ini` pages with the per-tab rights, live STATUS, change password; still to do: its calibration / flat-field / XYZ setup dialogs, the profiles editor); operators and engineers accept it on a test machine | UI review sessions |
 | 12 | Thermal measurement, viewer, licence, installer, simulation mode for demos | M | Installer deploys side by side with LabVIEW on a clean PC | Licence decision; which tools are still needed |
 | **M3** | **Parallel run, then cutover machine by machine** | | Same results over an agreed period; rollback (start LabVIEW) tested | Test machine, production schedule |
 
@@ -255,6 +255,7 @@ Phases 4, 5 and 6 are independent and can run in parallel. Phases 7 to 9 can sta
 | Ports and folders | REST from `alox.ini [webservice] port` (owner 2026-11-27: the supervisor calls 8001), websocket 6123, folders from `alox_setup.ini` (the WL port no longer exists) | Owner |
 | File names with one-second resolution (same-second overwrite) | Decide: keep names (other tools may read them) or add milliseconds | Map Part 4 |
 | Passwords stored Base64 in `alox.ini` | Owner's decision 5 (recommendation: hashed, with a migration on first login) | Map Part 1 |
+| Properties panel: "Set Property" at each value change, `alox.ini` saved at EXIT; device settings sent to the running modules | Edits pending until APPLY / SAVE / EXIT (only the changed keys written); settings read by the devices at start-up are marked and apply at the next start (no hot reconfiguration) | `alox_properties_ui` |
 | Camera and Z behaviour (flat field, flip, LEDs, autofocus/refocus, Z macros) | As decided in `docs/10` §6 and `docs/answers/`; decisions about the TCP protocol no longer apply | Camera server spec |
 | Timings that included the TCP round trip (for example the fast autofocus Z estimate taken after `Get Image` returns, `docs/06` D16) | Re-validate: without TCP the latency is shorter, so the Z estimate and any timeout tuned on LabVIEW change | Camera server spec |
 

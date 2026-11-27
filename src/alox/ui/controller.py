@@ -57,6 +57,7 @@ from alox.core.users import UserAction, UserType
 from alox.devices.base import DeviceError, DeviceState
 from alox.events import Event
 from alox.ui.adapters import ImageProvider, build_params, stage_to_wafer, wafer_to_stage
+from alox.ui.properties_panel import PANEL_NAME, PropertiesModel
 from alox.ui.settings_panels import SettingsModel, panel_by_name
 
 __all__ = ["ROWS", "TOPICS", "ActionResult", "Controller", "FunctionRow", "Snapshot", "StartButton", "StatusLook",
@@ -562,11 +563,38 @@ class Controller:
         return self.core.functions.running == _ROWS[row_key].function
 
     def open_settings(self) -> ActionResult:
-        """SETTINGS: right "Edit Properties", the properties UI ("Vision Core") in the SETTINGS tab."""
+        """SETTINGS: right "Edit Properties", the properties panel ("Vision Core", :mod:`alox.ui.properties_panel`)
+        in the SETTINGS tab (``data`` = the panel name, which the window opens with :meth:`properties_model`)."""
         if not self.can(UserAction.EDIT_PROPERTIES):
             return ActionResult(False, f"settings: not allowed for {self.user.label}")
         self.core.log.info("General properties (clicked)")
-        return ActionResult(True, "Vision Core", Tab.SETTINGS, "Vision Core")
+        return ActionResult(True, PANEL_NAME, Tab.SETTINGS, PANEL_NAME)
+
+    def properties_model(self) -> PropertiesModel:
+        """The model of the properties panel on the core's ``alox.ini`` store (per-page rights of the current user)."""
+        return PropertiesModel(self.core)
+
+    def reset_job_info(self) -> ActionResult:
+        """RESET JOB INFORMATIONS (properties STATUS page): SEMI manager "Init". The SEMI job travels with each
+        measurement request here, so this only clears the job shown by the results panels (the window does it)."""
+        self.core.log.info("Reset job informations (clicked)")
+        return ActionResult(True, "job informations reset")
+
+    def chuck_calibration(self) -> ActionResult:
+        """Chuck Calibration (properties SYSTEM page, ``alox_properties_ui`` event 77): right "Bowing", then a bowing
+        measurement with the global ``Chuck Calibration`` (statuses 200, HIGH-LEVEL MEASUREMENTS tab), through the
+        command bus as the supervisor's ``Measure Bowing``; the bowing writes ``ChuckCalibration<...>.chuck``."""
+        if not self.can(UserAction.BOWING):
+            return ActionResult(False, f"chuck calibration: not allowed for {self.user.label}")
+        if not self.core.functions.condition_ok():
+            return ActionResult(False, "chuck calibration: a function is running")
+        if not self.available(FunctionName.BOWING_MEASURE):
+            return ActionResult(False, "chuck calibration: bowing not available")
+        request = MeasureRequest(Measure.BOWING, JobInfo(), self.core.profile_manager.current,
+                                 {"chuck_calibration": True})
+        self.core.commands.post(Method(int(Measure.BOWING)), request, source="ui")
+        self.core.log.info("Chuck calibration (Start)")
+        return ActionResult(True, "Chuck calibration (Start)", Tab.HIGH_LEVEL, request)
 
     # ============================================================================================== acquisition
     def select_camera(self, camera: int, *, quiet: bool = False) -> ActionResult:

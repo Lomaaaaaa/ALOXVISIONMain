@@ -842,6 +842,12 @@ class ResultsBook:
         name = self.current.get(level)
         return None if name is None else self.models[name]
 
+    def reset_jobs(self) -> None:
+        """RESET JOB INFORMATIONS (SEMI manager "Init"): forget the SEMI job shown by every panel."""
+        for model in self.models.values():
+            model.job = None
+            model.revision += 1
+
     def handle(self, event: Any) -> str | None:
         """Take a bus event; returns the level (:data:`HIGH` / :data:`LOW`) whose panel changed, else None."""
         topic = str(getattr(event, "topic", ""))

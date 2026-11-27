@@ -20,13 +20,17 @@ on :mod:`alox.ui.settings_panels`) in the SETTINGS tab, one at a time as ``alox_
 closes it, asking before pending edits are dropped); it follows the user's right and reloads when the active profile
 changes.
 
+Properties panel: SETTINGS (right "Edit Properties") opens the properties panel "Vision Core"
+(:class:`alox.ui.properties_form.PropertiesPanel` on :mod:`alox.ui.properties_panel`) in the same place, one panel at a
+time: the ``alox.ini`` settings page by page with the per-page rights, the live STATUS page (300 ms and the status
+events), RESET JOB INFORMATIONS, CHUCK CALIBRATION, change password.
+
 Results panels (:mod:`alox.ui.results_panels` on the models of :mod:`alox.ui.results`, fed by the bus events): the
 HIGH-LEVEL MEASUREMENTS tab shows the running or last high-level function (Mesa, Bowing, Tilt) and the measurement
 statuses, the LOW-LEVEL MEASUREMENTS tab the last low-level function with a panel (Autofocus, Refocus, Search
 Wavelength, Auto Exposure, Detect Circle, Measure Oxyd).
 
-Placeholders (next steps): the properties UI in the SETTINGS tab, the profiles editor, the optical viewfinder and
-the thermal measurement.
+Placeholders (next steps): the profiles editor, the optical viewfinder and the thermal measurement.
 """
 
 from __future__ import annotations
@@ -79,6 +83,8 @@ from alox.ui.controller import (
     Snapshot,
     Tab,
 )
+from alox.ui.properties_form import PropertiesPanel
+from alox.ui.properties_panel import PANEL_NAME
 from alox.ui.results import HIGH, LOW, ResultsBook
 from alox.ui.results_panels import ResultsPage
 from alox.ui.settings_form import SettingsPanel
@@ -92,7 +98,8 @@ log = logging.getLogger(__name__)
 NEXT_STEPS = (
     ("Function settings panels: Refocus Oxyd (no ⚙ button on the LabVIEW panel), the panels' own tools (learning, "
      "exposure tables, test runs)"),
-    "Properties UI (SETTINGS button: alox_properties_ui and its tabs, with the per-tab rights)",
+    ("Properties panel dialogs: pixel size calibration (alox_calibration_ui), flat field (alox_vignetting_ui), XYZ "
+     "setup (alox_xyz_stages_ui), LOAD CHUCK REF"),
     ("Results panels still missing: Refocus Oxyd, Tracking, Search Object (LOW-LEVEL MEASUREMENTS tab), the image "
      "overlays of the run panels"),
     "Profiles editor (EDIT PROFILES: alox_profiles_ui)",
@@ -152,7 +159,7 @@ class MainWindow(QMainWindow):
         self.poll_worker = Worker("ui-poll", self)
         self.image_worker = Worker("ui-image", self)
         self.log_window: LogWindow | None = None
-        self.settings_panel: SettingsPanel | None = None
+        self.settings_panel: SettingsPanel | PropertiesPanel | None = None
         self.results = ResultsBook(controller.core.functions.last_result)
 
         self._themed_icons: list[tuple[Any, str, str]] = []
@@ -570,10 +577,13 @@ class MainWindow(QMainWindow):
         placeholder. A panel with pending edits is asked about first and kept open on "No"."""
         current = self.settings_panel
         if current is not None:
-            if current.spec.name == panel:
+            if current.panel_name == panel:
                 return
-            if current.model.dirty and not self.confirm(f"Discard the changes of {current.spec.name}?"):
+            if current.dirty and not self.confirm(f"Discard the changes of {current.panel_name}?"):
                 return
+        if panel == PANEL_NAME:
+            self._show_properties()
+            return
         model = self.controller.settings_model(panel)
         if model is None:
             self._settings_placeholder(panel)
@@ -588,6 +598,17 @@ class MainWindow(QMainWindow):
         self.settings_panel = widget
         self.tabs_caption(panel)
 
+    def _show_properties(self) -> None:
+        """The properties panel ("Vision Core") in the SETTINGS tab."""
+        self._drop_panel()
+        self.settings_page.hide()
+        widget = PropertiesPanel(self.controller.properties_model(), on_close=self.close_settings,
+                                 confirm=self.confirm, on_result=lambda text: self.statusBar().showMessage(text, 8000),
+                                 reset_jobs=self.reset_jobs, chuck_calibration=self.chuck_calibration)
+        self.settings_layout.addWidget(widget, 1)
+        self.settings_panel = widget
+        self.tabs_caption(PANEL_NAME)
+
     def close_settings(self) -> None:
         """"Close Panel": back to the empty SETTINGS tab."""
         self._settings_placeholder(None)
@@ -595,6 +616,8 @@ class MainWindow(QMainWindow):
     def _drop_panel(self) -> None:
         panel, self.settings_panel = self.settings_panel, None
         if panel is not None:
+            if isinstance(panel, PropertiesPanel):
+                panel.timer.stop()
             self.settings_layout.removeWidget(panel)
             panel.setParent(None)
             panel.deleteLater()
@@ -675,6 +698,8 @@ class MainWindow(QMainWindow):
             self.settings_panel.reload()
         if "measures" in parts:
             self.refresh_measures()
+        if parts & {"system", "measures"} and isinstance(self.settings_panel, PropertiesPanel):
+            self.settings_panel.refresh_status()
         if "tab" in parts:
             tab = self.controller.take_tab()
             if tab is not None:
@@ -773,6 +798,16 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> Future[ActionResult]:
         return self._act(self.controller.open_settings)
+
+    def reset_jobs(self) -> None:
+        """RESET JOB INFORMATIONS (properties STATUS page): the SEMI job of the results panels cleared."""
+        self.results.reset_jobs()
+        for level in (HIGH, LOW):
+            self.show_results(level)
+        self._act(self.controller.reset_job_info)
+
+    def chuck_calibration(self) -> Future[ActionResult]:
+        return self._act(self.controller.chuck_calibration)
 
     def select_camera(self, index: int) -> Future[ActionResult]:
         return self._act(self.controller.select_camera, int(index))

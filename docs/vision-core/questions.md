@@ -159,3 +159,13 @@ use synthetic equivalents).
 | — | One file names the High Mag camera "LowMagg" and the Low Mag "HighMag" (both USB) | Owner: a test file; no change |
 | — | `[webservice] port_I32 = 8001`; the application's REST API listened on 8002 | Owner: the supervisor calls 8001. Done: the REST and websocket ports are read from `alox.ini` `[webservice] port` / `[websocket] port` (defaults 8001 / 6123; `--rest-port` / `--ws-port` override) |
 | — | All recipe keys are read except the Get Image display keys, the unused Blobs keys (`detect.vcsel.binary*`, …), and the autofocus/refocus window and overlay switches | As designed |
+
+### Properties panel (to ask, from `alox_properties_ui`)
+
+| # | Question | Default meanwhile | Source |
+|---|---|---|---|
+| P1 | The PYROMETER page is enabled by the **monochromator** right (`propertiesmonochromator`), not a pyrometer right: intended? | as LabVIEW | ui/properties_panel.py |
+| P2 | The panel opens on HARDWARE DEVICES / XYZ STAGES for an Operator when `user.rights.**admin**.propertiesxyzstages` is TRUE (the admin key, not the operator's): intended? | as LabVIEW | ui/properties_panel.py |
+| P3 | COM ports are indicators in LabVIEW; here they are editable (next start), as the application opens the ports itself. Keep editable? | editable | ui/properties_panel.py |
+| P4 | LOAD CHUCK REF: which rows/columns of the `.chuck` file give dZ1..dZ5, Zcenter and `bowchuckA/B`, and the "Estimated chuck BOW" formula? | not ported | ui/properties_panel.py |
+| P5 | Are the pixel-size calibration, flat-field (vignetting) and XYZ setup dialogs still used, or done elsewhere? | not ported (disabled buttons) | ui/properties_form.py |

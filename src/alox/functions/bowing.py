@@ -508,6 +508,8 @@ class BowingMeasurement(MeasurementFunction):
             extra = {}
             if overrides.get("x") is not None:
                 extra["measure_distance_mm"] = _float(overrides["x"], "x")
+            if overrides.get("chuck_calibration"):                 # the properties panel's Chuck Calibration
+                extra["chuck_calibration"] = True
             return BowingParams.from_profile(profile, **extra)
         if isinstance(request, Mapping):
             return BowingParams.from_profile(profile, **dict(request))
